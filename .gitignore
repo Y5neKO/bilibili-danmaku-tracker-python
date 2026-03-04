@@ -1,0 +1,6 @@
+.idea/
+.spec-workflow/
+__pycache__/
+cookie.txt
+report.html
+
