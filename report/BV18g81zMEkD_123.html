@@ -7,7 +7,7 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background: #f5f5f5; padding: 20px; }
-        .container { max-width: 1200px; margin: 0 auto; }
+        .container { max-width: 1400px; margin: 0 auto; }
         h1 { color: #333; margin-bottom: 10px; }
         .summary { background: #fff; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         .summary-item { display: inline-block; margin-right: 30px; }
@@ -23,7 +23,7 @@
         .user-name { color: #333; font-weight: 500; text-decoration: none; }
         .user-name:hover { color: #00a1d6; }
         .uid { color: #999; font-size: 12px; }
-        .danmaku-list { max-width: 500px; }
+        .danmaku-list { max-width: 400px; }
         .danmaku-item { display: inline-block; background: #f0f0f0; padding: 4px 8px; margin: 2px; border-radius: 4px; font-size: 13px; word-break: break-all; }
         .danmaku-count { background: #00a1d6; color: #fff; padding: 2px 8px; border-radius: 10px; font-size: 12px; }
         .uncracked { background: #fff3cd; padding: 15px; border-radius: 8px; margin-top: 20px; }
@@ -34,6 +34,10 @@
         .video-info a { color: #00a1d6; text-decoration: none; font-size: 16px; }
         .video-info a:hover { text-decoration: underline; }
         .sign { color: #999; font-size: 12px; margin-top: 4px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .medal-list { max-width: 250px; }
+        .medal-item { display: inline-block; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); color: #fff; padding: 2px 8px; margin: 2px; border-radius: 4px; font-size: 12px; }
+        .medal-level { background: rgba(255,255,255,0.3); padding: 1px 4px; border-radius: 3px; margin-left: 4px; font-size: 11px; }
+        .medal-wearing { border: 2px solid #ffd700; }
     </style>
 </head>
 <body>
@@ -68,6 +72,7 @@
                     <th style="width:60px">头像</th>
                     <th style="width:150px">用户信息</th>
                     <th>签名</th>
+                    <th style="width:250px">粉丝灯牌</th>
                     <th>匹配弹幕内容</th>
                     <th style="width:80px">弹幕数</th>
                 </tr>
@@ -86,13 +91,14 @@ GitHub:Y5neKO
 交流群：1006360839
 GitHub:Y5neKO
 一些教程受政策限制无法上传</td>
+                    <td class="medal-list"><span class="medal-item medal-wearing" title="主播: 魔法Zc目录 (Lv.27)">Zc憨憨(魔法Zc目录)<span class="medal-level">27</span></span><span class="medal-item " title="主播: 老飞宇66 (Lv.25)">78鼠鼠(老飞宇66)<span class="medal-level">25</span></span><span class="medal-item " title="主播: Y5neKO (Lv.16)">Y5neKO(Y5neKO)<span class="medal-level">16</span></span><span class="medal-item " title="主播: 楼上的老张 (Lv.12)">Lzhang(楼上的老张)<span class="medal-level">12</span></span><span class="medal-item " title="主播: 一首日语歌 (Lv.3)">音节(一首日语歌)<span class="medal-level">3</span></span><span class="medal-item " title="主播: 夏色祭Official (Lv.2)">祭丝(夏色祭Official)<span class="medal-level">2</span></span></td>
                     <td class="danmaku-list"><span class="danmaku-item">123</span></td>
                     <td><span class="danmaku-count">1</span></td>
                 </tr>
             </tbody>
         </table>
         <div class="footer">
-            生成时间: 2026-03-04 14:44:20 | Bilibili弹幕发送者查询工具
+            生成时间: 2026-03-04 15:23:03 | Bilibili弹幕发送者查询工具
         </div>
     </div>
 </body>

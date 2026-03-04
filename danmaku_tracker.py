@@ -393,7 +393,7 @@ class HashCache:
 # ============== 用户信息缓存 ==============
 
 class UserInfoCache:
-    """用户信息缓存管理器（一个UID一个文件）"""
+    """用户信息缓存管理器（一个UID一个文件，包含用户信息和灯牌信息）"""
 
     def __init__(self, cache_dir: str = "userinfo"):
         self.cache_dir = cache_dir
@@ -406,12 +406,28 @@ class UserInfoCache:
             os.makedirs(self.cache_dir, exist_ok=True)
 
     def _get_cache_path(self, uid: int) -> str:
-        """获取缓存文件路径"""
+        """获取用户信息缓存文件路径"""
         return os.path.join(self.cache_dir, f"{uid}.json")
+
+    def _get_medal_cache_path(self, uid: int) -> str:
+        """获取灯牌信息缓存文件路径"""
+        return os.path.join(self.cache_dir, f"{uid}-MedalWall.json")
 
     def get(self, uid: int) -> Optional[Dict]:
         """获取缓存的用户信息"""
         cache_path = self._get_cache_path(uid)
+        with self._lock:
+            if os.path.exists(cache_path):
+                try:
+                    with open(cache_path, 'r', encoding='utf-8') as f:
+                        return json.load(f)
+                except (json.JSONDecodeError, IOError):
+                    return None
+        return None
+
+    def get_medal(self, uid: int) -> Optional[Dict]:
+        """获取缓存的灯牌信息"""
+        cache_path = self._get_medal_cache_path(uid)
         with self._lock:
             if os.path.exists(cache_path):
                 try:
@@ -435,19 +451,35 @@ class UserInfoCache:
             except IOError as e:
                 print(f"保存用户缓存失败 (UID {uid}): {e}")
 
+    def set_medal(self, uid: int, medal_info: Dict):
+        """保存灯牌信息到缓存"""
+        cache_path = self._get_medal_cache_path(uid)
+        with self._lock:
+            try:
+                temp_file = cache_path + '.tmp'
+                with open(temp_file, 'w', encoding='utf-8') as f:
+                    json.dump(medal_info, f, ensure_ascii=False, indent=2)
+                os.replace(temp_file, cache_path)
+            except IOError as e:
+                print(f"保存灯牌缓存失败 (UID {uid}): {e}")
+
     def exists(self, uid: int) -> bool:
-        """检查缓存是否存在"""
+        """检查用户信息缓存是否存在"""
         return os.path.exists(self._get_cache_path(uid))
 
+    def medal_exists(self, uid: int) -> bool:
+        """检查灯牌信息缓存是否存在"""
+        return os.path.exists(self._get_medal_cache_path(uid))
+
     def delete(self, uid: int):
-        """删除单个用户的缓存"""
-        cache_path = self._get_cache_path(uid)
+        """删除单个用户的所有缓存"""
         with self._lock:
-            if os.path.exists(cache_path):
-                os.remove(cache_path)
+            for path in [self._get_cache_path(uid), self._get_medal_cache_path(uid)]:
+                if os.path.exists(path):
+                    os.remove(path)
 
     def clear(self):
-        """清空所有用户缓存"""
+        """清空所有用户缓存（包括用户信息和灯牌信息）"""
         with self._lock:
             if os.path.exists(self.cache_dir):
                 for filename in os.listdir(self.cache_dir):
@@ -537,6 +569,49 @@ class BilibiliClient:
 # 全局用户信息缓存实例（在 DanmakuTracker 初始化时设置）
 _user_info_cache: Optional[UserInfoCache] = None
 _refresh_user_cache = False
+_bilibili_cookie: str = ""  # 用于灯牌API请求
+
+
+def get_medal_wall(uid: int) -> Optional[Dict]:
+    """
+    获取用户粉丝灯牌信息
+
+    Args:
+        uid: 用户ID
+
+    Returns:
+        灯牌信息字典，失败返回None
+    """
+    global _user_info_cache, _refresh_user_cache, _bilibili_cookie
+
+    # 尝试从缓存读取
+    if _user_info_cache and not _refresh_user_cache:
+        cached = _user_info_cache.get_medal(uid)
+        if cached:
+            return cached
+
+    url = f"https://api.live.bilibili.com/xlive/web-ucenter/user/MedalWall?target_id={uid}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": f"https://space.bilibili.com/{uid}/",
+    }
+    if _bilibili_cookie:
+        headers["Cookie"] = _bilibili_cookie
+
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        data = resp.json()
+
+        if data.get("code") == 0 and data.get("data"):
+            medal_data = data["data"]
+            # 保存到缓存
+            if _user_info_cache:
+                _user_info_cache.set_medal(uid, medal_data)
+            return medal_data
+    except Exception as e:
+        print(f"  [警告] 获取灯牌信息失败 (UID {uid}): {e}")
+
+    return None
 
 
 def get_user_info_by_api(uid: int, max_retries: int = 3) -> Optional[Dict]:
@@ -558,6 +633,22 @@ def get_user_info_by_api(uid: int, max_retries: int = 3) -> Optional[Dict]:
     if _user_info_cache and not _refresh_user_cache:
         cached = _user_info_cache.get(uid)
         if cached:
+            # 检查是否需要补充灯牌信息
+            if "medals" not in cached:
+                # 尝试读取灯牌缓存
+                medal_cached = _user_info_cache.get_medal(uid)
+                if medal_cached:
+                    medals = _parse_medal_info(medal_cached)
+                    cached["medals"] = medals
+                else:
+                    # 灯牌缓存也不存在，去获取
+                    medal_data = get_medal_wall(uid)
+                    if medal_data:
+                        cached["medals"] = _parse_medal_info(medal_data)
+                    else:
+                        cached["medals"] = []
+                    # 更新用户缓存
+                    _user_info_cache.set(uid, cached)
             return cached
 
     async def _get_info():
@@ -579,6 +670,13 @@ def get_user_info_by_api(uid: int, max_retries: int = 3) -> Optional[Dict]:
                     "sign": info.get("sign", ""),
                     "space_url": f"https://space.bilibili.com/{uid}"
                 }
+
+                # 获取灯牌信息
+                medal_data = get_medal_wall(uid)
+                if medal_data:
+                    medals = _parse_medal_info(medal_data)
+                    result["medals"] = medals
+
                 # 保存到缓存
                 if _user_info_cache:
                     _user_info_cache.set(uid, result)
@@ -614,6 +712,29 @@ def get_user_info_by_api(uid: int, max_retries: int = 3) -> Optional[Dict]:
             break
 
     return None
+
+
+def _parse_medal_info(medal_data: Dict) -> List[Dict]:
+    """
+    解析灯牌信息，提取关键字段
+
+    Args:
+        medal_data: API返回的灯牌数据
+
+    Returns:
+        简化的灯牌列表 [{"medal_name": "xxx", "target_name": "xxx", "level": 20}, ...]
+    """
+    medals = []
+    for item in medal_data.get("list", []):
+        medal_info = item.get("medal_info", {})
+        medals.append({
+            "medal_name": medal_info.get("medal_name", ""),
+            "target_name": item.get("target_name", ""),
+            "level": medal_info.get("level", 0),
+            "target_id": medal_info.get("target_id", 0),
+            "wearing_status": medal_info.get("wearing_status", 0)  # 1=正在佩戴
+        })
+    return medals
 
 
 # 保留旧方法作为备用（不需要bilibili_api依赖）
@@ -664,7 +785,10 @@ class DanmakuTracker:
                  cache_file: str = "hash_cache.json", refresh_cache: bool = False,
                  user_cache_dir: str = "userinfo", refresh_user_cache: bool = False,
                  max_retries: int = 3):
-        global _user_info_cache, _refresh_user_cache
+        global _user_info_cache, _refresh_user_cache, _bilibili_cookie
+
+        # 设置 Cookie 用于灯牌 API
+        _bilibili_cookie = cookie
 
         self.client = BilibiliClient(cookie)
         self.cracker = CRC32Cracker()
@@ -1253,7 +1377,7 @@ class DanmakuTracker:
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background: #f5f5f5; padding: 20px; }}
-        .container {{ max-width: 1200px; margin: 0 auto; }}
+        .container {{ max-width: 1400px; margin: 0 auto; }}
         h1 {{ color: #333; margin-bottom: 10px; }}
         .summary {{ background: #fff; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
         .summary-item {{ display: inline-block; margin-right: 30px; }}
@@ -1269,7 +1393,7 @@ class DanmakuTracker:
         .user-name {{ color: #333; font-weight: 500; text-decoration: none; }}
         .user-name:hover {{ color: #00a1d6; }}
         .uid {{ color: #999; font-size: 12px; }}
-        .danmaku-list {{ max-width: 500px; }}
+        .danmaku-list {{ max-width: 400px; }}
         .danmaku-item {{ display: inline-block; background: #f0f0f0; padding: 4px 8px; margin: 2px; border-radius: 4px; font-size: 13px; word-break: break-all; }}
         .danmaku-count {{ background: #00a1d6; color: #fff; padding: 2px 8px; border-radius: 10px; font-size: 12px; }}
         .uncracked {{ background: #fff3cd; padding: 15px; border-radius: 8px; margin-top: 20px; }}
@@ -1280,6 +1404,10 @@ class DanmakuTracker:
         .video-info a {{ color: #00a1d6; text-decoration: none; font-size: 16px; }}
         .video-info a:hover {{ text-decoration: underline; }}
         .sign {{ color: #999; font-size: 12px; margin-top: 4px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+        .medal-list {{ max-width: 250px; }}
+        .medal-item {{ display: inline-block; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); color: #fff; padding: 2px 8px; margin: 2px; border-radius: 4px; font-size: 12px; }}
+        .medal-level {{ background: rgba(255,255,255,0.3); padding: 1px 4px; border-radius: 3px; margin-left: 4px; font-size: 11px; }}
+        .medal-wearing {{ border: 2px solid #ffd700; }}
     </style>
 </head>
 <body>
@@ -1314,6 +1442,7 @@ class DanmakuTracker:
                     <th style="width:60px">头像</th>
                     <th style="width:150px">用户信息</th>
                     <th>签名</th>
+                    <th style="width:250px">粉丝灯牌</th>
                     <th>匹配弹幕内容</th>
                     <th style="width:80px">弹幕数</th>
                 </tr>
@@ -1325,10 +1454,22 @@ class DanmakuTracker:
             info = data['info']
             danmaku_list = data['danmaku_list']
             danmaku_count = len(danmaku_list)
+            medals = info.get('medals', [])
 
             avatar_html = f'<img class="avatar" src="{html_escape.escape(info["avatar"])}" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'"><div class="no-avatar" style="display:none">无头像</div>' if info.get('avatar') else '<div class="no-avatar">无头像</div>'
 
             danmaku_html = ''.join(f'<span class="danmaku-item">{html_escape.escape(dm)}</span>' for dm in danmaku_list)
+
+            # 生成灯牌 HTML
+            medal_html = ''
+            if medals:
+                for m in medals[:10]:  # 最多显示10个
+                    wearing_class = 'medal-wearing' if m.get('wearing_status') == 1 else ''
+                    medal_html += f'<span class="medal-item {wearing_class}" title="主播: {html_escape.escape(m["target_name"])} (Lv.{m["level"]})">{html_escape.escape(m["medal_name"])}({html_escape.escape(m["target_name"])})<span class="medal-level">{m["level"]}</span></span>'
+                if len(medals) > 10:
+                    medal_html += f'<span style="color:#999;font-size:12px;"> +{len(medals)-10}</span>'
+            else:
+                medal_html = '<span style="color:#999;font-size:12px;">暂无灯牌</span>'
 
             html += f'''                <tr>
                     <td>{avatar_html}</td>
@@ -1337,6 +1478,7 @@ class DanmakuTracker:
                         <div class="uid">UID: {uid}</div>
                     </td>
                     <td class="sign" title="{html_escape.escape(info.get("sign", ""))}">{html_escape.escape(info.get("sign", "暂无签名"))}</td>
+                    <td class="medal-list">{medal_html}</td>
                     <td class="danmaku-list">{danmaku_html}</td>
                     <td><span class="danmaku-count">{danmaku_count}</span></td>
                 </tr>
