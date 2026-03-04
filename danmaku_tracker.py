@@ -16,15 +16,64 @@ import requests
 import re
 import struct
 import html as html_escape
+import json
+import signal
+import sys
 from datetime import datetime
 from typing import List, Dict, Optional, Set, Tuple
 from dataclasses import dataclass, field
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 import threading
 import asyncio
 
 # bilibili_api 用于获取用户信息
 from bilibili_api import user, sync as bilibili_sync
+
+
+# ============== 退出检测 ==============
+
+class ExitHandler:
+    """全局退出处理器，用于优雅地终止程序"""
+
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._exit_flag = threading.Event()
+                    cls._instance._setup_signal_handlers()
+        return cls._instance
+
+    def _setup_signal_handlers(self):
+        """设置信号处理器"""
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+
+    def _signal_handler(self, signum, frame):
+        """信号处理函数"""
+        sig_name = signal.Signals(signum).name
+        print(f"\n\n收到退出信号 ({sig_name})，正在优雅退出...")
+        self._exit_flag.set()
+
+    def should_exit(self) -> bool:
+        """检查是否应该退出"""
+        return self._exit_flag.is_set()
+
+    def wait_for_exit(self, timeout: float = None) -> bool:
+        """等待退出信号"""
+        return self._exit_flag.wait(timeout)
+
+    def reset(self):
+        """重置退出标志"""
+        self._exit_flag.clear()
+
+
+# 全局退出处理器实例
+exit_handler = ExitHandler()
+
 
 # ============== Protobuf 弹幕解析 ==============
 
@@ -267,6 +316,80 @@ class CRC32Cracker:
         return []
 
 
+# ============== 哈希-UID映射缓存 ==============
+
+class HashCache:
+    """哈希到UID的映射缓存管理器"""
+
+    def __init__(self, cache_file: str = "hash_cache.json"):
+        self.cache_file = cache_file
+        self.cache: Dict[str, List[int]] = {}  # hash -> [uid1, uid2, ...]
+        self._lock = threading.Lock()  # 内部锁，保护缓存操作
+        self._load()
+
+    def _load(self):
+        """从文件加载缓存"""
+        if os.path.exists(self.cache_file):
+            try:
+                with open(self.cache_file, 'r', encoding='utf-8') as f:
+                    self.cache = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                self.cache = {}
+
+    def save(self):
+        """保存缓存到文件（原子写入）"""
+        with self._lock:
+            try:
+                # 先写入临时文件
+                temp_file = self.cache_file + '.tmp'
+                with open(temp_file, 'w', encoding='utf-8') as f:
+                    json.dump(self.cache, f, ensure_ascii=False, indent=2)
+                # 原子重命名（POSIX保证原子性）
+                os.replace(temp_file, self.cache_file)
+            except IOError as e:
+                print(f"保存缓存失败: {e}")
+
+    def get(self, mid_hash: str) -> Optional[List[int]]:
+        """获取缓存的UID列表"""
+        with self._lock:
+            return self.cache.get(mid_hash)
+
+    def set(self, mid_hash: str, uids: List[int]):
+        """设置缓存"""
+        with self._lock:
+            self.cache[mid_hash] = uids
+
+    def set_and_save(self, mid_hash: str, uids: List[int]):
+        """设置缓存并立即保存（原子操作）"""
+        with self._lock:
+            self.cache[mid_hash] = uids
+            try:
+                # 先写入临时文件
+                temp_file = self.cache_file + '.tmp'
+                with open(temp_file, 'w', encoding='utf-8') as f:
+                    json.dump(self.cache, f, ensure_ascii=False, indent=2)
+                # 原子重命名
+                os.replace(temp_file, self.cache_file)
+            except IOError as e:
+                print(f"保存缓存失败: {e}")
+
+    def set_empty(self, mid_hash: str):
+        """标记为无法匹配（空列表也缓存，避免重复匹配）"""
+        self.cache[mid_hash] = []
+
+    def clear(self):
+        """清空缓存"""
+        self.cache = {}
+        if os.path.exists(self.cache_file):
+            os.remove(self.cache_file)
+
+    def __contains__(self, mid_hash: str) -> bool:
+        return mid_hash in self.cache
+
+    def __len__(self) -> int:
+        return len(self.cache)
+
+
 # ============== Bilibili API 客户端 ==============
 
 class BilibiliClient:
@@ -345,29 +468,66 @@ class BilibiliClient:
 
 # ============== 用户信息获取 (使用 bilibili_api) ==============
 
-def get_user_info_by_api(uid: int) -> Optional[Dict]:
+def get_user_info_by_api(uid: int, max_retries: int = 3) -> Optional[Dict]:
     """
     使用 bilibili_api 库获取用户信息
     线程安全，每次调用创建新的事件循环
+
+    Args:
+        uid: 用户ID
+        max_retries: 最大重试次数（默认3次，风控校验失败时会无限重试）
+
+    Returns:
+        用户信息字典，失败返回None
     """
-    try:
-        async def _get_info():
-            u = user.User(uid=uid)
-            return await u.get_user_info()
+    async def _get_info():
+        u = user.User(uid=uid)
+        return await u.get_user_info()
 
-        # 在新线程中运行异步函数
-        info = bilibili_sync(_get_info())
+    attempt = 0
+    while True:
+        is_risk_control_error = False
+        try:
+            # 在新线程中运行异步函数
+            info = bilibili_sync(_get_info())
 
-        if info:
-            return {
-                "uid": uid,
-                "name": info.get("name", ""),
-                "avatar": info.get("face", ""),
-                "sign": info.get("sign", ""),
-                "space_url": f"https://space.bilibili.com/{uid}"
-            }
-    except Exception as e:
-        pass  # 静默失败，返回None
+            if info:
+                return {
+                    "uid": uid,
+                    "name": info.get("name", ""),
+                    "avatar": info.get("face", ""),
+                    "sign": info.get("sign", ""),
+                    "space_url": f"https://space.bilibili.com/{uid}"
+                }
+            else:
+                # info 为 None 或空 dict
+                if attempt < max_retries - 1:
+                    attempt += 1
+                    continue
+                else:
+                    print(f"  [警告] API返回空数据 (attempt {attempt+1}/{max_retries})")
+                    return None
+        except Exception as e:
+            error_msg = str(e)
+            # 检测风控校验失败，无限重试
+            if "风控校验失败" in error_msg:
+                is_risk_control_error = True
+                if attempt == 0 or attempt % 5 == 0:  # 每5次打印一次提示，避免刷屏
+                    print(f"  [风控] 遇到风控校验，正在重试... (UID {uid}, 第{attempt+1}次)")
+                attempt += 1
+                continue
+            else:
+                # 其他错误按正常重试逻辑处理
+                if attempt < max_retries - 1:
+                    attempt += 1
+                    continue
+                # 最后一次失败，输出详细错误
+                print(f"  [错误] 获取失败: {error_msg}")
+                return None
+
+        # 非风控错误且超过重试次数，退出循环
+        if not is_risk_control_error and attempt >= max_retries:
+            break
 
     return None
 
@@ -416,13 +576,21 @@ def get_user_info_by_html(session: requests.Session, uid: int) -> Optional[Dict]
 class DanmakuTracker:
     """弹幕发送者查询器"""
 
-    def __init__(self, cookie: str = "", threads: int = 10):
+    def __init__(self, cookie: str = "", threads: int = 10,
+                 cache_file: str = "hash_cache.json", refresh_cache: bool = False,
+                 max_retries: int = 3):
         self.client = BilibiliClient(cookie)
         self.cracker = CRC32Cracker()
         self.threads = threads
+        self.max_retries = max_retries
         self.danmaku_list: List[DanmakuItem] = []  # 保存所有弹幕
         self.danmaku_map: Dict[str, List[str]] = {}  # key: "内容|秒数", value: [midHash列表]
-        self._cracked_cache: Dict[str, List[int]] = {}  # 哈希匹配缓存
+
+        # 哈希-UID映射缓存
+        self.hash_cache = HashCache(cache_file)
+        if refresh_cache:
+            print("已清空哈希缓存")
+            self.hash_cache.clear()
 
     def load_danmaku(self, cid: int):
         """加载弹幕数据"""
@@ -559,7 +727,7 @@ class DanmakuTracker:
             content: 弹幕内容（或正则表达式）
             time_seconds: 弹幕出现时间(秒)，可选，用于精确匹配
             use_regex: 是否使用正则表达式匹配
-            threads: 线程数
+            threads: 线程数（仅用于哈希匹配阶段）
 
         Returns:
             发送者信息列表
@@ -573,49 +741,120 @@ class DanmakuTracker:
 
         matched_hashes = list(matched_hashes)
         total = len(matched_hashes)
-        print(f"找到 {total} 个哈希值，正在匹配...")
+        print(f"找到 {total} 个哈希值")
 
-        # 使用线程锁保护共享数据
+        # 检查缓存命中情况
+        cached_count = sum(1 for h in matched_hashes if h in self.hash_cache)
+        if cached_count > 0:
+            print(f"缓存命中: {cached_count}/{total} 个哈希值")
+
+        # ============ 第一阶段：匹配哈希（可多线程） ============
+        print("\n[阶段1] 正在匹配哈希值...")
+        hash_to_uids: Dict[str, List[int]] = {}
         lock = threading.Lock()
-        progress = [0]  # 使用列表以便在闭包中修改
+        progress = [0]
+        cache_write_lock = threading.Lock()  # 缓存写入锁，避免并发写入
 
-        def process_hash(mid_hash):
-            nonlocal progress
-            local_results = []
-
+        def crack_hash(mid_hash):
             with lock:
                 progress[0] += 1
                 print(f"[{progress[0]}/{total}] 匹配哈希: {mid_hash}")
 
-            uids = self._cracked_cache.get(mid_hash)
-            if uids is None:
-                uids = self.cracker.crack(mid_hash)
+            # 优先从缓存获取
+            cached = self.hash_cache.get(mid_hash)
+            if cached is not None:
                 with lock:
-                    self._cracked_cache[mid_hash] = uids
+                    if cached:
+                        print(f"  [缓存] -> UID: {cached}")
+                    else:
+                        print(f"  [缓存] 无法匹配")
+                return mid_hash, cached, True  # 第三个参数表示来自缓存
 
-            if not uids:
-                with lock:
+            # 检查退出信号
+            if exit_handler.should_exit():
+                return mid_hash, None, True
+
+            # 缓存未命中，执行匹配
+            uids = self.cracker.crack(mid_hash)
+
+            with lock:
+                if uids:
+                    print(f"  [匹配] -> UID: {uids}")
+                else:
                     print(f"  无法匹配 (可能是超过8位UID或已删号)")
-                return local_results
 
-            for uid in uids:
-                user_info = get_user_info_by_api(uid)
-                if user_info:
-                    local_results.append(user_info)
-                    with lock:
-                        print(f"  -> {user_info['name']} (UID: {uid})")
+            # 立即写入缓存文件（原子操作）
+            with cache_write_lock:
+                self.hash_cache.set_and_save(mid_hash, uids if uids else [])
 
-            return local_results
+            return mid_hash, uids, False
 
+        # 哈希匹配可使用多线程（纯计算，不请求网络）
         if threads > 1:
             with ThreadPoolExecutor(max_workers=threads) as executor:
-                futures = {executor.submit(process_hash, h): h for h in matched_hashes}
+                futures = {executor.submit(crack_hash, h): h for h in matched_hashes}
                 for future in as_completed(futures):
-                    results.extend(future.result())
+                    # 检查退出信号
+                    if exit_handler.should_exit():
+                        print("\n检测到退出信号，取消剩余任务...")
+                        for f in futures:
+                            f.cancel()
+                        break
+                    try:
+                        mid_hash, uids, from_cache = future.result(timeout=1)
+                        if uids:
+                            hash_to_uids[mid_hash] = uids
+                    except Exception:
+                        pass
         else:
             for mid_hash in matched_hashes:
-                results.extend(process_hash(mid_hash))
+                # 检查退出信号
+                if exit_handler.should_exit():
+                    print("\n检测到退出信号，停止匹配...")
+                    break
+                _, uids, from_cache = crack_hash(mid_hash)
+                if uids:
+                    hash_to_uids[mid_hash] = uids
 
+        # 检查是否被中断
+        if exit_handler.should_exit():
+            print("程序已退出")
+            sys.exit(0)
+
+        # 收集所有UID
+        all_uids = set()
+        for uids in hash_to_uids.values():
+            all_uids.update(uids)
+
+        print(f"\n哈希匹配完成，共找到 {len(all_uids)} 个唯一UID")
+
+        # ============ 第二阶段：串行获取用户信息（避免风控） ============
+        print("\n[阶段2] 正在获取用户信息（串行执行，避免触发风控）...")
+        uid_to_info: Dict[int, Dict] = {}
+
+        for i, uid in enumerate(all_uids, 1):
+            # 检查退出信号
+            if exit_handler.should_exit():
+                print("\n检测到退出信号，停止获取用户信息...")
+                break
+
+            print(f"[{i}/{len(all_uids)}] 获取用户信息: UID {uid}")
+            user_info = get_user_info_by_api(uid, self.max_retries)
+            if user_info:
+                uid_to_info[uid] = user_info
+                print(f"  -> {user_info['name']}")
+            else:
+                print(f"  -> 无法获取用户信息")
+                # 保留基本信息
+                uid_to_info[uid] = {
+                    'uid': uid,
+                    'name': f'(用户{uid})',
+                    'avatar': '',
+                    'sign': '',
+                    'space_url': f'https://space.bilibili.com/{uid}'
+                }
+
+        results = list(uid_to_info.values())
         return results
 
     def export_html_report(self, pattern: str, time_seconds: Optional[int] = None,
@@ -632,7 +871,7 @@ class DanmakuTracker:
             output_file: 输出文件路径
             video_title: 视频标题
             video_url: 视频URL
-            threads: 线程数
+            threads: 线程数（仅用于哈希匹配阶段）
 
         Returns:
             生成的HTML内容
@@ -661,86 +900,145 @@ class DanmakuTracker:
         print(f"匹配弹幕: {matched_danmaku_count} 条")
         print(f"唯一哈希: {len(hash_to_danmaku)} 个")
 
-        # 2. 多线程匹配哈希并获取用户信息
-        user_data: Dict[int, Dict] = {}  # uid -> {info, danmaku_list}
+        # 检查缓存命中情况
+        cached_count = sum(1 for h in hash_to_danmaku.keys() if h in self.hash_cache)
+        if cached_count > 0:
+            print(f"缓存命中: {cached_count}/{len(hash_to_danmaku)} 个哈希值")
+
+        # ============ 第一阶段：匹配哈希（可多线程） ============
+        print(f"\n[阶段1] 正在匹配哈希值 (线程数: {threads})...")
         uncracked_hashes = []
         lock = threading.Lock()
         progress = [0]
         total = len(hash_to_danmaku)
+        cache_write_lock = threading.Lock()  # 缓存写入锁，避免并发写入
 
-        print(f"\n正在匹配哈希并获取用户信息 (线程数: {threads})...")
-
-        def process_hash_item(item):
+        def crack_hash_item(item):
             mid_hash, danmaku_list = item
-            local_results = []
-
             with lock:
                 progress[0] += 1
                 print(f"[{progress[0]}/{total}] 匹配哈希: {mid_hash}")
 
-            uids = self._cracked_cache.get(mid_hash)
-            if uids is None:
-                uids = self.cracker.crack(mid_hash)
+            # 优先从缓存获取
+            cached = self.hash_cache.get(mid_hash)
+            if cached is not None:
                 with lock:
-                    self._cracked_cache[mid_hash] = uids
+                    if cached:
+                        print(f"  [缓存] -> UID: {cached}")
+                    else:
+                        print(f"  [缓存] 无法匹配")
+                        uncracked_hashes.append((mid_hash, danmaku_list))
+                return mid_hash, cached if cached else None, danmaku_list, True
 
-            if not uids:
-                with lock:
-                    uncracked_hashes.append((mid_hash, danmaku_list))
-                return local_results
+            # 检查退出信号
+            if exit_handler.should_exit():
+                return mid_hash, None, danmaku_list, True
 
-            for uid in uids:
-                user_info = get_user_info_by_api(uid)
-                if user_info:
-                    local_results.append({
-                        'uid': uid,
-                        'info': user_info,
-                        'danmaku_list': danmaku_list.copy()
-                    })
-                    with lock:
-                        print(f"  -> {user_info['name']} (UID: {uid})")
+            # 缓存未命中，执行匹配
+            uids = self.cracker.crack(mid_hash)
+
+            with lock:
+                if uids:
+                    print(f"  [匹配] -> UID: {uids}")
                 else:
-                    local_results.append({
+                    uncracked_hashes.append((mid_hash, danmaku_list))
+                    print(f"  无法匹配 (可能是超过8位UID或已删号)")
+
+            # 立即写入缓存文件（原子操作）
+            with cache_write_lock:
+                self.hash_cache.set_and_save(mid_hash, uids if uids else [])
+
+            return mid_hash, uids if uids else None, danmaku_list, False
+
+        # 哈希匹配结果：hash -> (uids, danmaku_list)
+        hash_match_results: Dict[str, Tuple[List[int], List[str]]] = {}
+
+        if threads > 1:
+            with ThreadPoolExecutor(max_workers=threads) as executor:
+                futures = {executor.submit(crack_hash_item, item): item
+                          for item in hash_to_danmaku.items()}
+                for future in as_completed(futures):
+                    # 检查退出信号
+                    if exit_handler.should_exit():
+                        print("\n检测到退出信号，取消剩余任务...")
+                        for f in futures:
+                            f.cancel()
+                        break
+                    try:
+                        mid_hash, uids, danmaku_list, from_cache = future.result(timeout=1)
+                        if uids:
+                            hash_match_results[mid_hash] = (uids, danmaku_list)
+                    except Exception:
+                        pass
+        else:
+            for item in hash_to_danmaku.items():
+                # 检查退出信号
+                if exit_handler.should_exit():
+                    print("\n检测到退出信号，停止匹配...")
+                    break
+                mid_hash, uids, danmaku_list, from_cache = crack_hash_item(item)
+                if uids:
+                    hash_match_results[mid_hash] = (uids, danmaku_list)
+
+        # 检查是否被中断
+        if exit_handler.should_exit():
+            print("哈希匹配被中断")
+            print("程序已退出")
+            sys.exit(0)
+
+        # 收集所有UID
+        all_uids = set()
+        for uids, _ in hash_match_results.values():
+            all_uids.update(uids)
+
+        print(f"\n哈希匹配完成，共找到 {len(all_uids)} 个唯一UID")
+
+        # ============ 第三阶段：串行获取用户信息（避免风控） ============
+        print("\n[阶段2] 正在获取用户信息（串行执行，避免触发风控）...")
+        uid_to_info: Dict[int, Dict] = {}
+
+        for i, uid in enumerate(all_uids, 1):
+            # 检查退出信号
+            if exit_handler.should_exit():
+                print("\n检测到退出信号，停止获取用户信息...")
+                break
+
+            print(f"[{i}/{len(all_uids)}] 获取用户信息: UID {uid}")
+            user_info = get_user_info_by_api(uid, self.max_retries)
+            if user_info:
+                uid_to_info[uid] = user_info
+                print(f"  -> {user_info['name']}")
+            else:
+                print(f"  -> 无法获取用户信息")
+                uid_to_info[uid] = {
+                    'uid': uid,
+                    'name': f'(用户{uid})',
+                    'avatar': '',
+                    'sign': '',
+                    'space_url': f'https://space.bilibili.com/{uid}'
+                }
+
+        # 构建用户数据（合并弹幕）
+        user_data: Dict[int, Dict] = {}  # uid -> {info, danmaku_list}
+        for mid_hash, (uids, danmaku_list) in hash_match_results.items():
+            for uid in uids:
+                if uid in user_data:
+                    # 合并弹幕
+                    for dm in danmaku_list:
+                        if dm not in user_data[uid]['danmaku_list']:
+                            user_data[uid]['danmaku_list'].append(dm)
+                else:
+                    user_data[uid] = {
                         'uid': uid,
-                        'info': {
+                        'info': uid_to_info.get(uid, {
                             'uid': uid,
                             'name': f'(用户{uid})',
                             'avatar': '',
                             'sign': '',
                             'space_url': f'https://space.bilibili.com/{uid}'
-                        },
+                        }),
                         'danmaku_list': danmaku_list.copy()
-                    })
-                    with lock:
-                        print(f"  -> 无法获取用户信息 (UID: {uid})")
-
-            return local_results
-
-        if threads > 1:
-            with ThreadPoolExecutor(max_workers=threads) as executor:
-                futures = {executor.submit(process_hash_item, item): item
-                          for item in hash_to_danmaku.items()}
-                for future in as_completed(futures):
-                    for result in future.result():
-                        uid = result['uid']
-                        with lock:
-                            if uid in user_data:
-                                # 合并弹幕
-                                for dm in result['danmaku_list']:
-                                    if dm not in user_data[uid]['danmaku_list']:
-                                        user_data[uid]['danmaku_list'].append(dm)
-                            else:
-                                user_data[uid] = result
-        else:
-            for item in hash_to_danmaku.items():
-                for result in process_hash_item(item):
-                    uid = result['uid']
-                    if uid in user_data:
-                        for dm in result['danmaku_list']:
-                            if dm not in user_data[uid]['danmaku_list']:
-                                user_data[uid]['danmaku_list'].append(dm)
-                    else:
-                        user_data[uid] = result
+                    }
 
         # 3. 生成HTML
         html = self._generate_html(
@@ -937,6 +1235,12 @@ def main():
 
   # 使用Cookie (推荐登录后使用)
   python danmaku_tracker.py --bvid BV1xx --content "测试" --cookie "SESSDATA=xxx"
+
+  # 强制刷新缓存（重新匹配所有哈希）
+  python danmaku_tracker.py --bvid BV1xx --content "测试" --refresh-cache
+
+  # 指定缓存文件路径
+  python danmaku_tracker.py --bvid BV1xx --content "测试" --cache-file my_cache.json
         """
     )
 
@@ -954,7 +1258,13 @@ def main():
     parser.add_argument("--count-only", action="store_true",
                         help="只统计匹配的用户数量（不获取用户详细信息，速度更快）")
     parser.add_argument("--threads", type=int, default=10,
-                        help="多线程数 (默认: 10，用于加速匹配和获取用户信息)")
+                        help="多线程数 (默认: 10，用于加速哈希匹配)")
+    parser.add_argument("--cache-file", default="hash_cache.json",
+                        help="哈希-UID映射缓存文件路径 (默认: hash_cache.json)")
+    parser.add_argument("--refresh-cache", action="store_true",
+                        help="强制刷新缓存，清除已有的哈希-UID映射")
+    parser.add_argument("--retries", type=int, default=3,
+                        help="获取用户信息失败时的重试次数 (默认: 3)")
 
     args = parser.parse_args()
 
@@ -969,7 +1279,13 @@ def main():
             return
 
     # 初始化查询器
-    tracker = DanmakuTracker(cookie, threads=args.threads)
+    tracker = DanmakuTracker(
+        cookie,
+        threads=args.threads,
+        cache_file=args.cache_file,
+        refresh_cache=args.refresh_cache,
+        max_retries=args.retries
+    )
 
     # 获取CID和视频信息
     cid = args.cid
@@ -1055,11 +1371,18 @@ def main():
                     print(f"    签名: {user['sign']}")
                 print()
 
-            # 自动导出HTML报告到 report/{bvid}.html
+            # 自动导出HTML报告到 report/{bvid}_{pattern}.html
             if args.bvid:
                 report_dir = "report"
                 os.makedirs(report_dir, exist_ok=True)
-                report_file = os.path.join(report_dir, f"{args.bvid}.html")
+
+                # 清理 pattern 中的特殊字符，用于文件名
+                safe_pattern = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', pattern)
+                # 限制长度，避免文件名过长
+                if len(safe_pattern) > 30:
+                    safe_pattern = safe_pattern[:30] + "..."
+
+                report_file = os.path.join(report_dir, f"{args.bvid}_{safe_pattern}.html")
                 tracker.export_html_report(
                     pattern=pattern,
                     time_seconds=time_seconds,
