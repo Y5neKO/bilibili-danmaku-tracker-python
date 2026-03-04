@@ -161,10 +161,10 @@ def decode_dm_list(data: bytes) -> List[DanmakuItem]:
     return items
 
 
-# ============== CRC32 破解算法 ==============
+# ============== CRC32 匹配算法 ==============
 
 class CRC32Cracker:
-    """CRC32哈希破解器 - 用于将midHash还原为UID"""
+    """CRC32哈希匹配器 - 用于将midHash还原为UID"""
 
     CRCPOLYNOMIAL = 0xEDB88320
 
@@ -233,7 +233,7 @@ class CRC32Cracker:
 
     def crack(self, uid_hash: str, max_digit: int = 10) -> List[int]:
         """
-        破解UID哈希
+        匹配UID哈希
 
         Args:
             uid_hash: 用户ID的CRC32哈希值(十六进制字符串)
@@ -422,7 +422,7 @@ class DanmakuTracker:
         self.threads = threads
         self.danmaku_list: List[DanmakuItem] = []  # 保存所有弹幕
         self.danmaku_map: Dict[str, List[str]] = {}  # key: "内容|秒数", value: [midHash列表]
-        self._cracked_cache: Dict[str, List[int]] = {}  # 哈希破解缓存
+        self._cracked_cache: Dict[str, List[int]] = {}  # 哈希匹配缓存
 
     def load_danmaku(self, cid: int):
         """加载弹幕数据"""
@@ -493,7 +493,7 @@ class DanmakuTracker:
 
     def _crack_hashes_to_uids(self, hashes: Set[str]) -> Set[int]:
         """
-        破解哈希值集合为UID集合（带缓存）
+        匹配哈希值集合为UID集合（带缓存）
 
         Args:
             hashes: 哈希值集合
@@ -573,7 +573,7 @@ class DanmakuTracker:
 
         matched_hashes = list(matched_hashes)
         total = len(matched_hashes)
-        print(f"找到 {total} 个哈希值，正在破解...")
+        print(f"找到 {total} 个哈希值，正在匹配...")
 
         # 使用线程锁保护共享数据
         lock = threading.Lock()
@@ -585,7 +585,7 @@ class DanmakuTracker:
 
             with lock:
                 progress[0] += 1
-                print(f"[{progress[0]}/{total}] 破解哈希: {mid_hash}")
+                print(f"[{progress[0]}/{total}] 匹配哈希: {mid_hash}")
 
             uids = self._cracked_cache.get(mid_hash)
             if uids is None:
@@ -595,7 +595,7 @@ class DanmakuTracker:
 
             if not uids:
                 with lock:
-                    print(f"  无法破解 (可能是超过8位UID或已删号)")
+                    print(f"  无法匹配 (可能是超过8位UID或已删号)")
                 return local_results
 
             for uid in uids:
@@ -661,14 +661,14 @@ class DanmakuTracker:
         print(f"匹配弹幕: {matched_danmaku_count} 条")
         print(f"唯一哈希: {len(hash_to_danmaku)} 个")
 
-        # 2. 多线程破解哈希并获取用户信息
+        # 2. 多线程匹配哈希并获取用户信息
         user_data: Dict[int, Dict] = {}  # uid -> {info, danmaku_list}
         uncracked_hashes = []
         lock = threading.Lock()
         progress = [0]
         total = len(hash_to_danmaku)
 
-        print(f"\n正在破解哈希并获取用户信息 (线程数: {threads})...")
+        print(f"\n正在匹配哈希并获取用户信息 (线程数: {threads})...")
 
         def process_hash_item(item):
             mid_hash, danmaku_list = item
@@ -676,7 +676,7 @@ class DanmakuTracker:
 
             with lock:
                 progress[0] += 1
-                print(f"[{progress[0]}/{total}] 破解哈希: {mid_hash}")
+                print(f"[{progress[0]}/{total}] 匹配哈希: {mid_hash}")
 
             uids = self._cracked_cache.get(mid_hash)
             if uids is None:
@@ -830,7 +830,7 @@ class DanmakuTracker:
                 <div class="summary-value">{total_users}</div>
             </div>
             <div class="summary-item">
-                <div class="summary-label">无法破解</div>
+                <div class="summary-label">无法匹配</div>
                 <div class="summary-value">{total_uncracked}</div>
             </div>
             <div class="pattern-info">
@@ -876,10 +876,10 @@ class DanmakuTracker:
         </table>
 '''
 
-        # 无法破解的哈希
+        # 无法匹配的哈希
         if uncracked_hashes:
             html += f'''        <div class="uncracked">
-            <div class="uncracked-title">无法破解的哈希 ({total_uncracked}个)</div>
+            <div class="uncracked-title">无法匹配的哈希 ({total_uncracked}个)</div>
             <div style="color:#666;font-size:13px;margin-bottom:10px;">可能是超过8位UID或已注销账号</div>
 '''
             for mid_hash, danmaku_list in uncracked_hashes[:20]:  # 只显示前20个
@@ -954,7 +954,7 @@ def main():
     parser.add_argument("--count-only", action="store_true",
                         help="只统计匹配的用户数量（不获取用户详细信息，速度更快）")
     parser.add_argument("--threads", type=int, default=10,
-                        help="多线程数 (默认: 10，用于加速破解和获取用户信息)")
+                        help="多线程数 (默认: 10，用于加速匹配和获取用户信息)")
 
     args = parser.parse_args()
 
@@ -1017,7 +1017,7 @@ def main():
         print(f"时间: {args.time} ({time_seconds}秒)")
 
     if args.count_only:
-        # 只统计数量（不破解哈希，速度快）
+        # 只统计数量（不匹配哈希，速度快）
         stats = tracker.count_users(pattern, time_seconds, use_regex)
 
         # 输出统计结果
