@@ -1,6 +1,6 @@
 .idea/
 .spec-workflow/
 __pycache__/
+userinfo/
 cookie.txt
-report.html
-
+hash_cache.json

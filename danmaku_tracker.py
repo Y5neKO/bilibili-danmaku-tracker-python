@@ -390,6 +390,72 @@ class HashCache:
         return len(self.cache)
 
 
+# ============== 用户信息缓存 ==============
+
+class UserInfoCache:
+    """用户信息缓存管理器（一个UID一个文件）"""
+
+    def __init__(self, cache_dir: str = "userinfo"):
+        self.cache_dir = cache_dir
+        self._lock = threading.Lock()
+        self._ensure_dir()
+
+    def _ensure_dir(self):
+        """确保缓存目录存在"""
+        if not os.path.exists(self.cache_dir):
+            os.makedirs(self.cache_dir, exist_ok=True)
+
+    def _get_cache_path(self, uid: int) -> str:
+        """获取缓存文件路径"""
+        return os.path.join(self.cache_dir, f"{uid}.json")
+
+    def get(self, uid: int) -> Optional[Dict]:
+        """获取缓存的用户信息"""
+        cache_path = self._get_cache_path(uid)
+        with self._lock:
+            if os.path.exists(cache_path):
+                try:
+                    with open(cache_path, 'r', encoding='utf-8') as f:
+                        return json.load(f)
+                except (json.JSONDecodeError, IOError):
+                    return None
+        return None
+
+    def set(self, uid: int, user_info: Dict):
+        """保存用户信息到缓存"""
+        cache_path = self._get_cache_path(uid)
+        with self._lock:
+            try:
+                # 先写入临时文件
+                temp_file = cache_path + '.tmp'
+                with open(temp_file, 'w', encoding='utf-8') as f:
+                    json.dump(user_info, f, ensure_ascii=False, indent=2)
+                # 原子重命名
+                os.replace(temp_file, cache_path)
+            except IOError as e:
+                print(f"保存用户缓存失败 (UID {uid}): {e}")
+
+    def exists(self, uid: int) -> bool:
+        """检查缓存是否存在"""
+        return os.path.exists(self._get_cache_path(uid))
+
+    def delete(self, uid: int):
+        """删除单个用户的缓存"""
+        cache_path = self._get_cache_path(uid)
+        with self._lock:
+            if os.path.exists(cache_path):
+                os.remove(cache_path)
+
+    def clear(self):
+        """清空所有用户缓存"""
+        with self._lock:
+            if os.path.exists(self.cache_dir):
+                for filename in os.listdir(self.cache_dir):
+                    if filename.endswith('.json'):
+                        filepath = os.path.join(self.cache_dir, filename)
+                        os.remove(filepath)
+
+
 # ============== Bilibili API 客户端 ==============
 
 class BilibiliClient:
@@ -468,10 +534,16 @@ class BilibiliClient:
 
 # ============== 用户信息获取 (使用 bilibili_api) ==============
 
+# 全局用户信息缓存实例（在 DanmakuTracker 初始化时设置）
+_user_info_cache: Optional[UserInfoCache] = None
+_refresh_user_cache = False
+
+
 def get_user_info_by_api(uid: int, max_retries: int = 3) -> Optional[Dict]:
     """
     使用 bilibili_api 库获取用户信息
     线程安全，每次调用创建新的事件循环
+    支持本地缓存（userinfo/{uid}.json）
 
     Args:
         uid: 用户ID
@@ -480,6 +552,14 @@ def get_user_info_by_api(uid: int, max_retries: int = 3) -> Optional[Dict]:
     Returns:
         用户信息字典，失败返回None
     """
+    global _user_info_cache, _refresh_user_cache
+
+    # 尝试从缓存读取
+    if _user_info_cache and not _refresh_user_cache:
+        cached = _user_info_cache.get(uid)
+        if cached:
+            return cached
+
     async def _get_info():
         u = user.User(uid=uid)
         return await u.get_user_info()
@@ -492,13 +572,17 @@ def get_user_info_by_api(uid: int, max_retries: int = 3) -> Optional[Dict]:
             info = bilibili_sync(_get_info())
 
             if info:
-                return {
+                result = {
                     "uid": uid,
                     "name": info.get("name", ""),
                     "avatar": info.get("face", ""),
                     "sign": info.get("sign", ""),
                     "space_url": f"https://space.bilibili.com/{uid}"
                 }
+                # 保存到缓存
+                if _user_info_cache:
+                    _user_info_cache.set(uid, result)
+                return result
             else:
                 # info 为 None 或空 dict
                 if attempt < max_retries - 1:
@@ -578,7 +662,10 @@ class DanmakuTracker:
 
     def __init__(self, cookie: str = "", threads: int = 10,
                  cache_file: str = "hash_cache.json", refresh_cache: bool = False,
+                 user_cache_dir: str = "userinfo", refresh_user_cache: bool = False,
                  max_retries: int = 3):
+        global _user_info_cache, _refresh_user_cache
+
         self.client = BilibiliClient(cookie)
         self.cracker = CRC32Cracker()
         self.threads = threads
@@ -586,11 +673,18 @@ class DanmakuTracker:
         self.danmaku_list: List[DanmakuItem] = []  # 保存所有弹幕
         self.danmaku_map: Dict[str, List[str]] = {}  # key: "内容|秒数", value: [midHash列表]
 
-        # 哈希-UID映射缓存
+        # 哈希-UID映射缓存（独立管理）
         self.hash_cache = HashCache(cache_file)
         if refresh_cache:
             print("已清空哈希缓存")
             self.hash_cache.clear()
+
+        # 用户信息缓存（独立管理）
+        _user_info_cache = UserInfoCache(user_cache_dir)
+        _refresh_user_cache = refresh_user_cache
+        if refresh_user_cache:
+            print("已清空用户信息缓存")
+            _user_info_cache.clear()
 
     def load_danmaku(self, cid: int):
         """加载弹幕数据"""
@@ -1314,8 +1408,11 @@ def main():
   # 使用Cookie (推荐登录后使用)
   python danmaku_tracker.py --bvid BV1xx --content "测试" --cookie "SESSDATA=xxx"
 
-  # 强制刷新缓存（重新匹配所有哈希）
+  # 强制刷新哈希缓存（重新匹配所有哈希）
   python danmaku_tracker.py --bvid BV1xx --content "测试" --refresh-cache
+
+  # 强制刷新用户信息缓存（重新获取所有用户信息）
+  python danmaku_tracker.py --bvid BV1xx --content "测试" --refresh-user-cache
 
   # 指定缓存文件路径
   python danmaku_tracker.py --bvid BV1xx --content "测试" --cache-file my_cache.json
@@ -1340,7 +1437,11 @@ def main():
     parser.add_argument("--cache-file", default="hash_cache.json",
                         help="哈希-UID映射缓存文件路径 (默认: hash_cache.json)")
     parser.add_argument("--refresh-cache", action="store_true",
-                        help="强制刷新缓存，清除已有的哈希-UID映射")
+                        help="强制刷新哈希缓存，清除已有的哈希-UID映射")
+    parser.add_argument("--user-cache-dir", default="userinfo",
+                        help="用户信息缓存目录 (默认: userinfo)")
+    parser.add_argument("--refresh-user-cache", action="store_true",
+                        help="强制刷新用户信息缓存，重新获取所有用户信息")
     parser.add_argument("--retries", type=int, default=3,
                         help="获取用户信息失败时的重试次数 (默认: 3)")
 
@@ -1362,6 +1463,8 @@ def main():
         threads=args.threads,
         cache_file=args.cache_file,
         refresh_cache=args.refresh_cache,
+        user_cache_dir=args.user_cache_dir,
+        refresh_user_cache=args.refresh_user_cache,
         max_retries=args.retries
     )
 

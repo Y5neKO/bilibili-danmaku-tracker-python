@@ -12,6 +12,8 @@ Bilibili视频弹幕用户分析工具，基于Python实现，用于分析Bilibi
 
 ![img_2.png](img/img_2.png)
 
+__注意：因crc32具有弱碰撞性，所以在匹配用户时可能会出现错误或匹配到错误的用户，准确率非100%，请自行判断真实性__
+
 ## Thanks
 
 @qianjiachun https://github.com/qianjiachun/bilibili-danmaku-tracker 感谢作者的完整思路，本项目基于其代码进行Python适配
