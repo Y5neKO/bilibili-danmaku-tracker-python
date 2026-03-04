@@ -649,6 +649,8 @@ def get_user_info_by_api(uid: int, max_retries: int = 3) -> Optional[Dict]:
                         cached["medals"] = []
                     # 更新用户缓存
                     _user_info_cache.set(uid, cached)
+            # 缓存命中，显示标记
+            print(f"  [缓存] -> {cached.get('name', '未知')}")
             return cached
 
     async def _get_info():
