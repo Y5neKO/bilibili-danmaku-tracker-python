@@ -719,7 +719,7 @@ class DanmakuTracker:
         }
 
     def search_by_content(self, content: str, time_seconds: Optional[int] = None,
-                          use_regex: bool = False, threads: int = 1) -> List[Dict]:
+                          use_regex: bool = False, threads: int = 1) -> Dict:
         """
         根据弹幕内容查询发送者
 
@@ -730,14 +730,34 @@ class DanmakuTracker:
             threads: 线程数（仅用于哈希匹配阶段）
 
         Returns:
-            发送者信息列表
+            包含用户信息和报告数据的字典:
+            {
+                'users': [用户信息列表],
+                'user_data': {uid: {info, danmaku_list}} 用于报告,
+                'uncracked_hashes': 未能匹配的哈希列表,
+                'matched_danmaku_count': 匹配的弹幕数量
+            }
         """
-        results = []
         matched_hashes = self._get_matched_hashes(content, time_seconds, use_regex)
+
+        # 收集匹配的弹幕（用于报告）
+        hash_to_danmaku: Dict[str, List[str]] = {}
+        matched_danmaku_count = 0
+        for dm in self.danmaku_list:
+            if time_seconds is not None:
+                dm_time = dm.progress // 1000
+                if abs(dm_time - time_seconds) > 1:
+                    continue
+            if self._match_content(dm.content, content, use_regex):
+                matched_danmaku_count += 1
+                if dm.mid_hash not in hash_to_danmaku:
+                    hash_to_danmaku[dm.mid_hash] = []
+                if dm.content not in hash_to_danmaku[dm.mid_hash]:
+                    hash_to_danmaku[dm.mid_hash].append(dm.content)
 
         if not matched_hashes:
             print(f"未找到匹配的弹幕: {content}")
-            return []
+            return {'users': [], 'user_data': {}, 'uncracked_hashes': [], 'matched_danmaku_count': 0}
 
         matched_hashes = list(matched_hashes)
         total = len(matched_hashes)
@@ -854,13 +874,45 @@ class DanmakuTracker:
                     'space_url': f'https://space.bilibili.com/{uid}'
                 }
 
-        results = list(uid_to_info.values())
-        return results
+        # 构建用户数据（包含弹幕列表，用于报告）
+        user_data: Dict[int, Dict] = {}  # uid -> {info, danmaku_list}
+        uncracked_hashes = []
+        for mid_hash in matched_hashes:
+            danmaku_list = hash_to_danmaku.get(mid_hash, [])
+            uids = hash_to_uids.get(mid_hash)
+            if uids:
+                for uid in uids:
+                    if uid in user_data:
+                        # 合并弹幕
+                        for dm in danmaku_list:
+                            if dm not in user_data[uid]['danmaku_list']:
+                                user_data[uid]['danmaku_list'].append(dm)
+                    else:
+                        user_data[uid] = {
+                            'uid': uid,
+                            'info': uid_to_info.get(uid, {
+                                'uid': uid,
+                                'name': f'(用户{uid})',
+                                'avatar': '',
+                                'sign': '',
+                                'space_url': f'https://space.bilibili.com/{uid}'
+                            }),
+                            'danmaku_list': danmaku_list.copy()
+                        }
+            else:
+                uncracked_hashes.append((mid_hash, danmaku_list))
+
+        return {
+            'users': list(uid_to_info.values()),
+            'user_data': user_data,
+            'uncracked_hashes': uncracked_hashes,
+            'matched_danmaku_count': matched_danmaku_count
+        }
 
     def export_html_report(self, pattern: str, time_seconds: Optional[int] = None,
                            use_regex: bool = False, output_file: str = "report.html",
                            video_title: str = "", video_url: str = "",
-                           threads: int = 1) -> str:
+                           threads: int = 1, cached_data: Optional[Dict] = None) -> str:
         """
         导出HTML报告
 
@@ -872,10 +924,36 @@ class DanmakuTracker:
             video_title: 视频标题
             video_url: 视频URL
             threads: 线程数（仅用于哈希匹配阶段）
+            cached_data: 已有的查询结果（由search_by_content返回），提供时直接使用，避免重复查询
 
         Returns:
             生成的HTML内容
         """
+        # 如果提供了缓存数据，直接使用
+        if cached_data:
+            user_data = cached_data.get('user_data', {})
+            uncracked_hashes = cached_data.get('uncracked_hashes', [])
+            matched_danmaku_count = cached_data.get('matched_danmaku_count', 0)
+
+            # 生成HTML
+            html = self._generate_html(
+                user_data=user_data,
+                uncracked_hashes=uncracked_hashes,
+                pattern=pattern,
+                use_regex=use_regex,
+                matched_danmaku_count=matched_danmaku_count,
+                video_title=video_title,
+                video_url=video_url
+            )
+
+            # 保存文件
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(html)
+
+            print(f"\n报告已保存到: {output_file}")
+            return html
+
+        # 以下为原有逻辑（无缓存数据时执行）
         # 1. 收集匹配的弹幕，按哈希分组
         hash_to_danmaku: Dict[str, List[str]] = {}
         matched_danmaku_count = 0
@@ -1344,7 +1422,8 @@ def main():
         print(f"唯一用户数量: {stats['unique_user_count']} 人")
     else:
         # 查询详细信息
-        results = tracker.search_by_content(pattern, time_seconds, use_regex, threads=args.threads)
+        result_data = tracker.search_by_content(pattern, time_seconds, use_regex, threads=args.threads)
+        results = result_data.get('users', [])
 
         # 输出结果
         print("\n" + "=" * 50)
@@ -1390,7 +1469,8 @@ def main():
                     output_file=report_file,
                     video_title=video_title,
                     video_url=video_url,
-                    threads=args.threads
+                    threads=args.threads,
+                    cached_data=result_data  # 传递已有数据，避免重复查询
                 )
                 print(f"报告已导出: {report_file}")
 
