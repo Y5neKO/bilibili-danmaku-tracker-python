@@ -72,10 +72,9 @@ class ResultsView(ctk.CTkFrame):
         self.user_list = UserCardList(self)
         self.user_list.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # 未匹配哈希区域
+        # 未匹配哈希区域（初始隐藏）
         self.unmatched_frame = ctk.CTkFrame(self)
-        self.unmatched_frame.pack(fill="x", padx=10, pady=5)
-
+        # 不在这里 pack，只有有未匹配时才显示
         self.unmatched_label = ctk.CTkLabel(
             self.unmatched_frame,
             text="",
@@ -96,11 +95,18 @@ class ResultsView(ctk.CTkFrame):
         user_data = result.get('user_data', {})
         matched_count = result.get('matched_danmaku_count', 0)
         uncracked = result.get('uncracked_hashes', [])
+        error_hashes = result.get('error_hashes', [])
 
-        stats_text = f"匹配弹幕: {matched_count} 条 | 找到用户: {len(users)} 人"
+        # 统计正常用户和错误用户
+        normal_users = [u for u in user_data.values() if not u.get('info', {}).get('is_error')]
+        error_users = [u for u in user_data.values() if u.get('info', {}).get('is_error')]
+
+        stats_text = f"匹配弹幕: {matched_count} 条 | 正常用户: {len(normal_users)} 人"
+        if error_users:
+            stats_text += f" | 获取失败: {len(error_users)} 人"
         self.stats_label.configure(text=stats_text)
 
-        # 显示用户列表
+        # 显示用户列表（包含正常用户和错误用户）
         users_list = list(user_data.values())
         self.user_list.set_users(users_list, on_user_click=self._on_user_click)
 
@@ -110,8 +116,13 @@ class ResultsView(ctk.CTkFrame):
             self.unmatched_label.configure(
                 text=f"⚠️ 有 {uncracked_count} 个哈希无法匹配（可能是超过8位UID或已删号）"
             )
+            # 显示未匹配区域
+            if not self.unmatched_frame.winfo_ismapped():
+                self.unmatched_frame.pack(fill="x", padx=10, pady=5)
         else:
-            self.unmatched_label.configure(text="")
+            # 隐藏未匹配区域
+            if self.unmatched_frame.winfo_ismapped():
+                self.unmatched_frame.pack_forget()
 
         # 启用导出按钮
         self.export_btn.configure(state="normal")
@@ -140,5 +151,8 @@ class ResultsView(ctk.CTkFrame):
         self.video_url_label.configure(text="")
         self.stats_label.configure(text="统计信息: 等待查询结果")
         self.unmatched_label.configure(text="")
+        # 隐藏未匹配区域
+        if self.unmatched_frame.winfo_ismapped():
+            self.unmatched_frame.pack_forget()
         self.user_list.clear()
         self.export_btn.configure(state="disabled")

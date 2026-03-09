@@ -1153,24 +1153,26 @@ class DanmakuTracker:
                 uid_to_info[uid] = user_info
                 self._log(f"  -> {user_info['name']}")
             else:
-                self._log(f"  -> 无法获取用户信息")
-                # 保留基本信息
-                uid_to_info[uid] = {
-                    'uid': uid,
-                    'name': f'(用户{uid})',
-                    'avatar': '',
-                    'sign': '',
-                    'space_url': f'https://space.bilibili.com/{uid}'
-                }
+                self._log(f"  -> 无法获取用户信息（将标记为未匹配）")
+                # 不添加默认信息， 获取失败的UID不加入 uid_to_info
 
         # 构建用户数据（包含弹幕列表，用于报告）
         user_data: Dict[int, Dict] = {}  # uid -> {info, danmaku_list}
-        uncracked_hashes = []
+        error_hashes = []  # 匹配到UID但无法获取信息的哈希
+        uncracked_hashes = []  # 完全无法匹配的哈希
         for mid_hash in matched_hashes:
             danmaku_list = hash_to_danmaku.get(mid_hash, [])
             uids = hash_to_uids.get(mid_hash)
-            if uids:
-                for uid in uids:
+            if not uids:
+                # 没有匹配到任何UID
+                uncracked_hashes.append((mid_hash, danmaku_list))
+                continue
+
+            # 检查是否有成功获取用户信息的UID
+            has_valid_uid = False
+            for uid in uids:
+                if uid in uid_to_info:
+                    has_valid_uid = True
                     if uid in user_data:
                         # 合并弹幕
                         for dm in danmaku_list:
@@ -1179,22 +1181,34 @@ class DanmakuTracker:
                     else:
                         user_data[uid] = {
                             'uid': uid,
-                            'info': uid_to_info.get(uid, {
-                                'uid': uid,
-                                'name': f'(用户{uid})',
-                                'avatar': '',
-                                'sign': '',
-                                'space_url': f'https://space.bilibili.com/{uid}'
-                            }),
+                            'info': uid_to_info[uid],
                             'danmaku_list': danmaku_list.copy()
                         }
-            else:
-                uncracked_hashes.append((mid_hash, danmaku_list))
+
+            # 如果所有UID都无法获取用户信息，创建错误标记的用户数据
+            if not has_valid_uid:
+                # 使用第一个UID作为标识，创建错误标记的用户信息
+                error_uid = uids[0]
+                error_info = {
+                    'mid_hash': mid_hash,
+                    'name': f'UID:{error_uid}',
+                    'face': '',
+                    'sign': '⚠️ 用户信息获取失败（可能已注销或封禁）',
+                    'is_error': True,
+                    'error_type': 'fetch_failed'
+                }
+                user_data[f"error_{mid_hash}"] = {
+                    'uid': error_uid,
+                    'info': error_info,
+                    'danmaku_list': danmaku_list.copy()
+                }
+                error_hashes.append((mid_hash, danmaku_list))
 
         return {
             'users': list(uid_to_info.values()),
             'user_data': user_data,
             'uncracked_hashes': uncracked_hashes,
+            'error_hashes': error_hashes,
             'matched_danmaku_count': matched_danmaku_count,
             'cancelled': exit_handler.should_exit()
         }
@@ -1223,12 +1237,14 @@ class DanmakuTracker:
         if cached_data:
             user_data = cached_data.get('user_data', {})
             uncracked_hashes = cached_data.get('uncracked_hashes', [])
+            error_hashes = cached_data.get('error_hashes', [])
             matched_danmaku_count = cached_data.get('matched_danmaku_count', 0)
 
             # 生成HTML
             html = self._generate_html(
                 user_data=user_data,
                 uncracked_hashes=uncracked_hashes,
+                error_hashes=error_hashes,
                 pattern=pattern,
                 use_regex=use_regex,
                 matched_danmaku_count=matched_danmaku_count,
@@ -1377,41 +1393,58 @@ class DanmakuTracker:
                 uid_to_info[uid] = user_info
                 print(f"  -> {user_info['name']}")
             else:
-                print(f"  -> 无法获取用户信息")
-                uid_to_info[uid] = {
-                    'uid': uid,
-                    'name': f'(用户{uid})',
-                    'avatar': '',
-                    'sign': '',
-                    'space_url': f'https://space.bilibili.com/{uid}'
-                }
+                print(f"  -> 无法获取用户信息（将标记为未匹配）")
+                # 不添加默认信息，获取失败的UID不加入 uid_to_info
 
         # 构建用户数据（合并弹幕）
         user_data: Dict[int, Dict] = {}  # uid -> {info, danmaku_list}
+        error_hashes = []  # 匹配到UID但无法获取信息的哈希
         for mid_hash, (uids, danmaku_list) in hash_match_results.items():
+            if not uids:
+                # 没有匹配到任何UID
+                uncracked_hashes.append((mid_hash, danmaku_list))
+                continue
+
+            # 检查是否有成功获取用户信息的UID
+            has_valid_uid = False
             for uid in uids:
-                if uid in user_data:
-                    # 合并弹幕
-                    for dm in danmaku_list:
-                        if dm not in user_data[uid]['danmaku_list']:
-                            user_data[uid]['danmaku_list'].append(dm)
-                else:
-                    user_data[uid] = {
-                        'uid': uid,
-                        'info': uid_to_info.get(uid, {
+                if uid in uid_to_info:
+                    has_valid_uid = True
+                    if uid in user_data:
+                        # 合并弹幕
+                        for dm in danmaku_list:
+                            if dm not in user_data[uid]['danmaku_list']:
+                                user_data[uid]['danmaku_list'].append(dm)
+                    else:
+                        user_data[uid] = {
                             'uid': uid,
-                            'name': f'(用户{uid})',
-                            'avatar': '',
-                            'sign': '',
-                            'space_url': f'https://space.bilibili.com/{uid}'
-                        }),
-                        'danmaku_list': danmaku_list.copy()
-                    }
+                            'info': uid_to_info[uid],
+                            'danmaku_list': danmaku_list.copy()
+                        }
+
+            # 如果所有UID都无法获取用户信息，创建错误标记的用户数据
+            if not has_valid_uid:
+                error_uid = uids[0]
+                error_info = {
+                    'mid_hash': mid_hash,
+                    'name': f'UID:{error_uid}',
+                    'face': '',
+                    'sign': '⚠️ 用户信息获取失败（可能已注销或封禁）',
+                    'is_error': True,
+                    'error_type': 'fetch_failed'
+                }
+                user_data[f"error_{mid_hash}"] = {
+                    'uid': error_uid,
+                    'info': error_info,
+                    'danmaku_list': danmaku_list.copy()
+                }
+                error_hashes.append((mid_hash, danmaku_list))
 
         # 3. 生成HTML
         html = self._generate_html(
             user_data=user_data,
             uncracked_hashes=uncracked_hashes,
+            error_hashes=error_hashes,
             pattern=pattern,
             use_regex=use_regex,
             matched_danmaku_count=matched_danmaku_count,
@@ -1428,17 +1461,20 @@ class DanmakuTracker:
 
     def _generate_html(self, user_data: Dict[int, Dict], uncracked_hashes: List,
                        pattern: str, use_regex: bool, matched_danmaku_count: int,
-                       video_title: str, video_url: str) -> str:
+                       video_title: str, video_url: str, error_hashes: List = None) -> str:
         """生成HTML报告"""
 
+        if error_hashes is None:
+            error_hashes = []
+
         # 统计
-        total_users = len(user_data)
+        total_users = len([u for u in user_data.values() if not u.get('info', {}).get('is_error')])
+        total_errors = len([u for u in user_data.values() if u.get('info', {}).get('is_error')])
         total_uncracked = len(uncracked_hashes)
 
-        # 按弹幕数量排序用户
+        # 按弹幕数量排序用户，正常用户在前，错误用户在后
         sorted_users = sorted(user_data.items(),
-                             key=lambda x: len(x[1]['danmaku_list']),
-                             reverse=True)
+                             key=lambda x: (x[1].get('info', {}).get('is_error', False), -len(x[1]['danmaku_list'])))
 
         html = f'''<!DOCTYPE html>
 <html lang="zh-CN">
@@ -1500,6 +1536,10 @@ class DanmakuTracker:
                 <div class="summary-value">{total_users}</div>
             </div>
             <div class="summary-item">
+                <div class="summary-label">获取失败</div>
+                <div class="summary-value" style="color:#ff6b6b;">{total_errors}</div>
+            </div>
+            <div class="summary-item">
                 <div class="summary-label">无法匹配</div>
                 <div class="summary-value">{total_uncracked}</div>
             </div>
@@ -1527,29 +1567,43 @@ class DanmakuTracker:
             danmaku_list = data['danmaku_list']
             danmaku_count = len(danmaku_list)
             medals = info.get('medals', [])
+            is_error = info.get('is_error', False)
 
-            avatar_html = f'<img class="avatar" src="{html_escape.escape(info["avatar"])}" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'"><div class="no-avatar" style="display:none">无头像</div>' if info.get('avatar') else '<div class="no-avatar">无头像</div>'
+            # 错误用户使用特殊样式
+            if is_error:
+                row_style = 'background:#fff3cd;'
+                avatar_html = '<div class="no-avatar" style="background:#ffe0b2;">⚠️</div>'
+                user_name_html = f'<span class="user-name" style="color:#856404;">{html_escape.escape(info["name"])} <span style="font-size:11px;color:#ff6b6b;">[获取失败]</span></span>'
+                uid_html = f'<div class="uid">UID: {data["uid"]} | Hash: {html_escape.escape(info.get("mid_hash", ""))}</div>'
+                sign_html = f'<span style="color:#ff6b6b;">{html_escape.escape(info.get("sign", "用户信息获取失败"))}</span>'
+                medal_html = '<span style="color:#999;font-size:12px;">-</span>'
+            else:
+                row_style = ''
+                avatar_html = f'<img class="avatar" src="{html_escape.escape(info["avatar"])}" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'"><div class="no-avatar" style="display:none">无头像</div>' if info.get('avatar') else '<div class="no-avatar">无头像</div>'
+                user_name_html = f'<a class="user-name" href="{html_escape.escape(info["space_url"])}" target="_blank">{html_escape.escape(info["name"])}</a>'
+                uid_html = f'<div class="uid">UID: {uid}</div>'
+                sign_html = f'<span title="{html_escape.escape(info.get("sign", ""))}">{html_escape.escape(info.get("sign", "暂无签名"))}</span>'
+
+                # 生成灯牌 HTML
+                medal_html = ''
+                if medals:
+                    for m in medals[:10]:  # 最多显示10个
+                        wearing_class = 'medal-wearing' if m.get('wearing_status') == 1 else ''
+                        medal_html += f'<span class="medal-item {wearing_class}" title="主播: {html_escape.escape(m["target_name"])} (Lv.{m["level"]})">{html_escape.escape(m["medal_name"])}({html_escape.escape(m["target_name"])})<span class="medal-level">{m["level"]}</span></span>'
+                    if len(medals) > 10:
+                        medal_html += f'<span style="color:#999;font-size:12px;"> +{len(medals)-10}</span>'
+                else:
+                    medal_html = '<span style="color:#999;font-size:12px;">暂无灯牌</span>'
 
             danmaku_html = ''.join(f'<span class="danmaku-item">{html_escape.escape(dm)}</span>' for dm in danmaku_list)
 
-            # 生成灯牌 HTML
-            medal_html = ''
-            if medals:
-                for m in medals[:10]:  # 最多显示10个
-                    wearing_class = 'medal-wearing' if m.get('wearing_status') == 1 else ''
-                    medal_html += f'<span class="medal-item {wearing_class}" title="主播: {html_escape.escape(m["target_name"])} (Lv.{m["level"]})">{html_escape.escape(m["medal_name"])}({html_escape.escape(m["target_name"])})<span class="medal-level">{m["level"]}</span></span>'
-                if len(medals) > 10:
-                    medal_html += f'<span style="color:#999;font-size:12px;"> +{len(medals)-10}</span>'
-            else:
-                medal_html = '<span style="color:#999;font-size:12px;">暂无灯牌</span>'
-
-            html += f'''                <tr>
+            html += f'''                <tr style="{row_style}">
                     <td>{avatar_html}</td>
                     <td>
-                        <a class="user-name" href="{html_escape.escape(info["space_url"])}" target="_blank">{html_escape.escape(info["name"])}</a>
-                        <div class="uid">UID: {uid}</div>
+                        {user_name_html}
+                        {uid_html}
                     </td>
-                    <td class="sign" title="{html_escape.escape(info.get("sign", ""))}">{html_escape.escape(info.get("sign", "暂无签名"))}</td>
+                    <td class="sign">{sign_html}</td>
                     <td class="medal-list">{medal_html}</td>
                     <td class="danmaku-list">{danmaku_html}</td>
                     <td><span class="danmaku-count">{danmaku_count}</span></td>

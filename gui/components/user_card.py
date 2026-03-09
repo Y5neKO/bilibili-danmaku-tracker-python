@@ -99,7 +99,13 @@ class UserCard(ctk.CTkFrame):
 
     def _create_ui(self):
         """创建UI"""
-        self.configure(border_width=1, border_color="gray")
+        is_error = self.user_data.get('info', {}).get('is_error', False)
+
+        # 错误用户使用特殊边框颜色
+        if is_error:
+            self.configure(border_width=2, border_color="#ff6b6b")
+        else:
+            self.configure(border_width=1, border_color="gray")
 
         # 主容器
         self.container = ctk.CTkFrame(self, fg_color="transparent")
@@ -111,11 +117,18 @@ class UserCard(ctk.CTkFrame):
         self.avatar_frame.pack_propagate(False)
 
         # 头像占位符（加载中显示）
-        self.avatar_label = ctk.CTkLabel(
-            self.avatar_frame,
-            text="👤",
-            font=ctk.CTkFont(size=30)
-        )
+        if is_error:
+            self.avatar_label = ctk.CTkLabel(
+                self.avatar_frame,
+                text="⚠️",
+                font=ctk.CTkFont(size=30)
+            )
+        else:
+            self.avatar_label = ctk.CTkLabel(
+                self.avatar_frame,
+                text="👤",
+                font=ctk.CTkFont(size=30)
+            )
         self.avatar_label.pack(expand=True)
 
         # 中间：用户信息
@@ -129,66 +142,87 @@ class UserCard(ctk.CTkFrame):
         name = self.user_data.get('info', {}).get('name', '未知用户')
         uid = self.user_data.get('uid', 'N/A')
 
-        self.name_label = ctk.CTkLabel(
-            self.name_frame,
-            text=name,
-            font=ctk.CTkFont(size=14, weight="bold")
-        )
-        self.name_label.pack(side="left")
+        # 错误用户显示特殊样式
+        if is_error:
+            self.name_label = ctk.CTkLabel(
+                self.name_frame,
+                text=f"{name} [获取失败]",
+                font=ctk.CTkFont(size=14, weight="bold"),
+                text_color="#ff6b6b"
+            )
+            self.name_label.pack(side="left")
 
-        self.uid_label = ctk.CTkLabel(
-            self.name_frame,
-            text=f"  UID: {uid}",
-            font=ctk.CTkFont(size=12),
-            text_color="gray"
-        )
-        self.uid_label.pack(side="left")
+            mid_hash = self.user_data.get('info', {}).get('mid_hash', '')
+            self.uid_label = ctk.CTkLabel(
+                self.name_frame,
+                text=f"  UID: {uid} | Hash: {mid_hash[:8]}...",
+                font=ctk.CTkFont(size=12),
+                text_color="gray"
+            )
+            self.uid_label.pack(side="left")
+        else:
+            self.name_label = ctk.CTkLabel(
+                self.name_frame,
+                text=name,
+                font=ctk.CTkFont(size=14, weight="bold")
+            )
+            self.name_label.pack(side="left")
+
+            self.uid_label = ctk.CTkLabel(
+                self.name_frame,
+                text=f"  UID: {uid}",
+                font=ctk.CTkFont(size=12),
+                text_color="gray"
+            )
+            self.uid_label.pack(side="left")
 
         # 签名
         sign = self.user_data.get('info', {}).get('sign', '')
         if sign:
+            sign_color = "#ff6b6b" if is_error else "gray"
             self.sign_label = ctk.CTkLabel(
                 self.info_frame,
-                text=f"签名: {sign}",
+                text=f"{'⚠️ ' if is_error else '签名: '}{sign}",
                 font=ctk.CTkFont(size=11),
-                text_color="gray",
+                text_color=sign_color,
                 wraplength=400,
                 justify="left"
             )
             self.sign_label.pack(fill="x", anchor="w")
 
-        # 灯牌信息（如果有）
-        medals = self.user_data.get('info', {}).get('medals', [])
-        if medals:
-            self.medal_frame = ctk.CTkFrame(self.info_frame, fg_color="transparent")
-            self.medal_frame.pack(fill="x", pady=(5, 0))
+        # 灯牌信息（错误用户不显示）
+        if not is_error:
+            medals = self.user_data.get('info', {}).get('medals', [])
+            if medals:
+                self.medal_frame = ctk.CTkFrame(self.info_frame, fg_color="transparent")
+                self.medal_frame.pack(fill="x", pady=(5, 0))
 
-            # 找到正在佩戴的灯牌，否则显示第一个
-            wearing_medal = None
-            for m in medals:
-                if m.get('wearing_status') == 1:
-                    wearing_medal = m
-                    break
+                # 找到正在佩戴的灯牌，否则显示第一个
+                wearing_medal = None
+                for m in medals:
+                    if m.get('wearing_status') == 1:
+                        wearing_medal = m
+                        break
 
-            display_medal = wearing_medal or medals[0]
-            medal_name = display_medal.get('medal_name', '')
-            target_name = display_medal.get('target_name', '')
-            medal_level = display_medal.get('level', 0)
+                display_medal = wearing_medal or medals[0]
+                medal_name = display_medal.get('medal_name', '')
+                target_name = display_medal.get('target_name', '')
+                medal_level = display_medal.get('level', 0)
 
-            # 灯牌颜色渐变（根据等级）
-            medal_color = self._get_medal_color(medal_level)
+                # 灯牌颜色渐变（根据等级）
+                medal_color = self._get_medal_color(medal_level)
 
-            medal_text = f"🏅 {medal_name}({target_name}) Lv.{medal_level}"
-            if len(medals) > 1:
-                medal_text += f" (+{len(medals)-1})"
+                medal_text = f"🏅 {medal_name}({target_name}) Lv.{medal_level}"
+                if len(medals) > 1:
+                    medal_text += f" (+{len(medals)-1})"
 
-            self.medal_label = ctk.CTkLabel(
-                self.medal_frame,
-                text=medal_text,
-                font=ctk.CTkFont(size=11),
-                text_color=medal_color
-            )
-            self.medal_label.pack(side="left")
+                self.medal_label = ctk.CTkLabel(
+                    self.medal_frame,
+                    text=medal_text,
+                    font=ctk.CTkFont(size=11),
+                    text_color=medal_color
+                )
+                self.medal_label.pack(side="left")
 
         # 弹幕列表
         danmaku_list = self.user_data.get('danmaku_list', [])
@@ -205,19 +239,20 @@ class UserCard(ctk.CTkFrame):
             )
             self.danmaku_label.pack(side="left")
 
-        # 右侧：操作按钮
+        # 右侧：操作按钮（错误用户不显示访问空间按钮）
         self.action_frame = ctk.CTkFrame(self.container, fg_color="transparent")
         self.action_frame.pack(side="right", padx=(10, 0))
 
-        space_url = self.user_data.get('info', {}).get('space_url', '')
-        if space_url:
-            self.space_btn = ctk.CTkButton(
-                self.action_frame,
-                text="访问空间",
-                width=80,
-                command=lambda: self._open_url(space_url)
-            )
-            self.space_btn.pack()
+        if not is_error:
+            space_url = self.user_data.get('info', {}).get('space_url', '')
+            if space_url:
+                self.space_btn = ctk.CTkButton(
+                    self.action_frame,
+                    text="访问空间",
+                    width=80,
+                    command=lambda: self._open_url(space_url)
+                )
+                self.space_btn.pack()
 
     def _open_url(self, url: str):
         """打开URL"""
