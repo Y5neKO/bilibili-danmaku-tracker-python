@@ -9,7 +9,7 @@ import json
 import time
 import requests
 
-USERINFO_DIR = "userinfo"
+USERINFO_DIR = "cache/userinfo"
 COOKIE = ""
 
 # 读取 Cookie

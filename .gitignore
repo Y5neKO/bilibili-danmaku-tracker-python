@@ -1,6 +1,19 @@
+# IDE
 .idea/
+
+# 工具目录
 .spec-workflow/
+.serena/
+
+# Python 缓存
 __pycache__/
-userinfo/
+*.py[cod]
+
+# 数据目录
+cache/
+data/
+output/
+
+# 配置文件
+config.json
 cookie.txt
-hash_cache.json

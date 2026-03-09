@@ -1,2 +1,4 @@
 requests
 bilibili-api-python
+customtkinter
+Pillow

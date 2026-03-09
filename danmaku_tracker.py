@@ -20,7 +20,7 @@ import json
 import signal
 import sys
 from datetime import datetime
-from typing import List, Dict, Optional, Set, Tuple
+from typing import List, Dict, Optional, Set, Tuple, Callable
 from dataclasses import dataclass, field
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 import threading
@@ -44,13 +44,20 @@ class ExitHandler:
                 if cls._instance is None:
                     cls._instance = super().__new__(cls)
                     cls._instance._exit_flag = threading.Event()
+                    cls._instance._external_stop = None  # 外部停止事件
                     cls._instance._setup_signal_handlers()
         return cls._instance
 
     def _setup_signal_handlers(self):
-        """设置信号处理器"""
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
+        """设置信号处理器（仅在主线程中）"""
+        try:
+            # 只在主线程中设置信号处理器
+            if threading.current_thread() is threading.main_thread():
+                signal.signal(signal.SIGINT, self._signal_handler)
+                signal.signal(signal.SIGTERM, self._signal_handler)
+        except (ValueError, OSError):
+            # 在某些环境下（如GUI线程）可能无法设置信号处理器
+            pass
 
     def _signal_handler(self, signum, frame):
         """信号处理函数"""
@@ -58,9 +65,21 @@ class ExitHandler:
         print(f"\n\n收到退出信号 ({sig_name})，正在优雅退出...")
         self._exit_flag.set()
 
+    def set_external_stop(self, stop_event: threading.Event):
+        """设置外部停止事件（GUI模式使用）"""
+        self._external_stop = stop_event
+
+    def clear_external_stop(self):
+        """清除外部停止事件"""
+        self._external_stop = None
+
     def should_exit(self) -> bool:
         """检查是否应该退出"""
-        return self._exit_flag.is_set()
+        if self._exit_flag.is_set():
+            return True
+        if self._external_stop is not None and self._external_stop.is_set():
+            return True
+        return False
 
     def wait_for_exit(self, timeout: float = None) -> bool:
         """等待退出信号"""
@@ -69,6 +88,7 @@ class ExitHandler:
     def reset(self):
         """重置退出标志"""
         self._exit_flag.clear()
+        self._external_stop = None
 
 
 # 全局退出处理器实例
@@ -519,16 +539,24 @@ class BilibiliClient:
             return None
 
     def get_video_info(self, bvid: str) -> Optional[Dict]:
-        """通过BV号获取视频信息"""
+        """通过BV号获取视频信息
+
+        Returns:
+            包含视频信息的字典，None表示请求失败
+        """
         url = f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}"
         try:
             resp = self.session.get(url, timeout=10)
             data = resp.json()
             if data.get("code") == 0:
+                video_data = data["data"]
                 return {
-                    "cid": data["data"]["cid"],
-                    "title": data["data"]["title"],
-                    "url": f"https://www.bilibili.com/video/{bvid}"
+                    "cid": video_data.get("cid"),
+                    "title": video_data.get("title"),
+                    "cover": video_data.get("pic"),  # 封面
+                    "owner_mid": video_data.get("owner", {}).get("mid"),
+                    "owner_name": video_data.get("owner", {}).get("name"),
+                    "pages": video_data.get("pages", [])
                 }
             else:
                 print(f"获取视频信息失败: {data.get('message')}")
@@ -784,9 +812,25 @@ class DanmakuTracker:
     """弹幕发送者查询器"""
 
     def __init__(self, cookie: str = "", threads: int = 10,
-                 cache_file: str = "hash_cache.json", refresh_cache: bool = False,
-                 user_cache_dir: str = "userinfo", refresh_user_cache: bool = False,
-                 max_retries: int = 3):
+                 cache_file: str = "cache/hash_cache.json", refresh_cache: bool = False,
+                 user_cache_dir: str = "cache/userinfo", refresh_user_cache: bool = False,
+                 max_retries: int = 3,
+                 on_progress: Callable[[int, int, str], None] = None,
+                 on_log: Callable[[str], None] = None,
+                 on_stage: Callable[[str], None] = None):
+        """
+        Args:
+            cookie: B站Cookie
+            threads: 线程数
+            cache_file: 哈希缓存文件
+            refresh_cache: 是否刷新哈希缓存
+            user_cache_dir: 用户信息缓存目录
+            refresh_user_cache: 是否刷新用户缓存
+            max_retries: 最大重试次数
+            on_progress: 进度回调 (current, total, message)
+            on_log: 日志回调 (message)
+            on_stage: 阶段变化回调 (stage_name)
+        """
         global _user_info_cache, _refresh_user_cache, _bilibili_cookie
 
         # 设置 Cookie 用于灯牌 API
@@ -799,22 +843,44 @@ class DanmakuTracker:
         self.danmaku_list: List[DanmakuItem] = []  # 保存所有弹幕
         self.danmaku_map: Dict[str, List[str]] = {}  # key: "内容|秒数", value: [midHash列表]
 
+        # GUI回调
+        self._on_progress = on_progress
+        self._on_log = on_log
+        self._on_stage = on_stage
+
         # 哈希-UID映射缓存（独立管理）
         self.hash_cache = HashCache(cache_file)
         if refresh_cache:
-            print("已清空哈希缓存")
+            self._log("已清空哈希缓存")
             self.hash_cache.clear()
 
         # 用户信息缓存（独立管理）
         _user_info_cache = UserInfoCache(user_cache_dir)
         _refresh_user_cache = refresh_user_cache
         if refresh_user_cache:
-            print("已清空用户信息缓存")
+            self._log("已清空用户信息缓存")
             _user_info_cache.clear()
+
+    def _log(self, message: str):
+        """输出日志"""
+        print(message)
+        if self._on_log:
+            self._on_log(message)
+
+    def _progress(self, current: int, total: int, message: str = ""):
+        """报告进度"""
+        if self._on_progress:
+            self._on_progress(current, total, message)
+
+    def _stage(self, stage_name: str):
+        """报告阶段变化"""
+        if self._on_stage:
+            self._on_stage(stage_name)
 
     def load_danmaku(self, cid: int):
         """加载弹幕数据"""
-        print(f"正在加载弹幕数据 (CID: {cid})...")
+        self._stage("loading")
+        self._log(f"正在加载弹幕数据 (CID: {cid})...")
         self.danmaku_list = self.client.get_all_danmaku(cid)
 
         # 构建索引
@@ -955,7 +1021,8 @@ class DanmakuTracker:
                 'users': [用户信息列表],
                 'user_data': {uid: {info, danmaku_list}} 用于报告,
                 'uncracked_hashes': 未能匹配的哈希列表,
-                'matched_danmaku_count': 匹配的弹幕数量
+                'matched_danmaku_count': 匹配的弹幕数量,
+                'cancelled': 是否被取消
             }
         """
         matched_hashes = self._get_matched_hashes(content, time_seconds, use_regex)
@@ -976,38 +1043,40 @@ class DanmakuTracker:
                     hash_to_danmaku[dm.mid_hash].append(dm.content)
 
         if not matched_hashes:
-            print(f"未找到匹配的弹幕: {content}")
-            return {'users': [], 'user_data': {}, 'uncracked_hashes': [], 'matched_danmaku_count': 0}
+            self._log(f"未找到匹配的弹幕: {content}")
+            return {'users': [], 'user_data': {}, 'uncracked_hashes': [], 'matched_danmaku_count': 0, 'cancelled': False}
 
         matched_hashes = list(matched_hashes)
         total = len(matched_hashes)
-        print(f"找到 {total} 个哈希值")
+        self._log(f"找到 {total} 个哈希值")
 
         # 检查缓存命中情况
         cached_count = sum(1 for h in matched_hashes if h in self.hash_cache)
         if cached_count > 0:
-            print(f"缓存命中: {cached_count}/{total} 个哈希值")
+            self._log(f"缓存命中: {cached_count}/{total} 个哈希值")
 
         # ============ 第一阶段：匹配哈希（可多线程） ============
-        print("\n[阶段1] 正在匹配哈希值...")
+        self._stage("cracking")
+        self._log("[阶段1] 正在匹配哈希值...")
         hash_to_uids: Dict[str, List[int]] = {}
         lock = threading.Lock()
-        progress = [0]
+        progress_counter = [0]
         cache_write_lock = threading.Lock()  # 缓存写入锁，避免并发写入
 
         def crack_hash(mid_hash):
             with lock:
-                progress[0] += 1
-                print(f"[{progress[0]}/{total}] 匹配哈希: {mid_hash}")
+                progress_counter[0] += 1
+                p = progress_counter[0]
+            self._log(f"[{p}/{total}] 匹配哈希: {mid_hash}")
+            self._progress(p, total, f"匹配哈希: {mid_hash}")
 
             # 优先从缓存获取
             cached = self.hash_cache.get(mid_hash)
             if cached is not None:
-                with lock:
-                    if cached:
-                        print(f"  [缓存] -> UID: {cached}")
-                    else:
-                        print(f"  [缓存] 无法匹配")
+                if cached:
+                    self._log(f"  [缓存] -> UID: {cached}")
+                else:
+                    self._log(f"  [缓存] 无法匹配")
                 return mid_hash, cached, True  # 第三个参数表示来自缓存
 
             # 检查退出信号
@@ -1017,11 +1086,10 @@ class DanmakuTracker:
             # 缓存未命中，执行匹配
             uids = self.cracker.crack(mid_hash)
 
-            with lock:
-                if uids:
-                    print(f"  [匹配] -> UID: {uids}")
-                else:
-                    print(f"  无法匹配 (可能是超过8位UID或已删号)")
+            if uids:
+                self._log(f"  [匹配] -> UID: {uids}")
+            else:
+                self._log(f"  无法匹配 (可能是超过8位UID或已删号)")
 
             # 立即写入缓存文件（原子操作）
             with cache_write_lock:
@@ -1036,7 +1104,7 @@ class DanmakuTracker:
                 for future in as_completed(futures):
                     # 检查退出信号
                     if exit_handler.should_exit():
-                        print("\n检测到退出信号，取消剩余任务...")
+                        self._log("检测到退出信号，取消剩余任务...")
                         for f in futures:
                             f.cancel()
                         break
@@ -1050,7 +1118,7 @@ class DanmakuTracker:
             for mid_hash in matched_hashes:
                 # 检查退出信号
                 if exit_handler.should_exit():
-                    print("\n检测到退出信号，停止匹配...")
+                    self._log("检测到退出信号，停止匹配...")
                     break
                 _, uids, from_cache = crack_hash(mid_hash)
                 if uids:
@@ -1058,33 +1126,34 @@ class DanmakuTracker:
 
         # 检查是否被中断
         if exit_handler.should_exit():
-            print("程序已退出")
-            sys.exit(0)
+            return {'users': [], 'user_data': {}, 'uncracked_hashes': [], 'matched_danmaku_count': 0, 'cancelled': True}
 
         # 收集所有UID
         all_uids = set()
         for uids in hash_to_uids.values():
             all_uids.update(uids)
 
-        print(f"\n哈希匹配完成，共找到 {len(all_uids)} 个唯一UID")
+        self._log(f"哈希匹配完成，共找到 {len(all_uids)} 个唯一UID")
 
         # ============ 第二阶段：串行获取用户信息（避免风控） ============
-        print("\n[阶段2] 正在获取用户信息（串行执行，避免触发风控）...")
+        self._stage("fetching")
+        self._log("[阶段2] 正在获取用户信息（串行执行，避免触发风控）...")
         uid_to_info: Dict[int, Dict] = {}
 
         for i, uid in enumerate(all_uids, 1):
             # 检查退出信号
             if exit_handler.should_exit():
-                print("\n检测到退出信号，停止获取用户信息...")
+                self._log("检测到退出信号，停止获取用户信息...")
                 break
 
-            print(f"[{i}/{len(all_uids)}] 获取用户信息: UID {uid}")
+            self._log(f"[{i}/{len(all_uids)}] 获取用户信息: UID {uid}")
+            self._progress(i, len(all_uids), f"获取用户信息: UID {uid}")
             user_info = get_user_info_by_api(uid, self.max_retries)
             if user_info:
                 uid_to_info[uid] = user_info
-                print(f"  -> {user_info['name']}")
+                self._log(f"  -> {user_info['name']}")
             else:
-                print(f"  -> 无法获取用户信息")
+                self._log(f"  -> 无法获取用户信息")
                 # 保留基本信息
                 uid_to_info[uid] = {
                     'uid': uid,
@@ -1126,7 +1195,8 @@ class DanmakuTracker:
             'users': list(uid_to_info.values()),
             'user_data': user_data,
             'uncracked_hashes': uncracked_hashes,
-            'matched_danmaku_count': matched_danmaku_count
+            'matched_danmaku_count': matched_danmaku_count,
+            'cancelled': exit_handler.should_exit()
         }
 
     def export_html_report(self, pattern: str, time_seconds: Optional[int] = None,
@@ -1578,11 +1648,11 @@ def main():
                         help="只统计匹配的用户数量（不获取用户详细信息，速度更快）")
     parser.add_argument("--threads", type=int, default=10,
                         help="多线程数 (默认: 10，用于加速哈希匹配)")
-    parser.add_argument("--cache-file", default="hash_cache.json",
+    parser.add_argument("--cache-file", default="cache/hash_cache.json",
                         help="哈希-UID映射缓存文件路径 (默认: hash_cache.json)")
     parser.add_argument("--refresh-cache", action="store_true",
                         help="强制刷新哈希缓存，清除已有的哈希-UID映射")
-    parser.add_argument("--user-cache-dir", default="userinfo",
+    parser.add_argument("--user-cache-dir", default="cache/userinfo",
                         help="用户信息缓存目录 (默认: userinfo)")
     parser.add_argument("--refresh-user-cache", action="store_true",
                         help="强制刷新用户信息缓存，重新获取所有用户信息")
