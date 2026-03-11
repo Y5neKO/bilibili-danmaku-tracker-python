@@ -2,6 +2,12 @@
 
 基于Python实现，用于分析Bilibili视频的弹幕数据，提取用户信息弹幕内容。
 
+## TODO
+
+- [x] 弹幕关键词查找，支持子字符串/正则表达式
+- [x] 弹幕发送者分析，包括用户数量、弹幕数量
+- [x] 弹幕发送时间
+
 ## Feature 1.0 (Command Line Interface)
 
 提取SESSDATA，保存到文件或直接在参数中使用即可

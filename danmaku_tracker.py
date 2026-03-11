@@ -1027,8 +1027,8 @@ class DanmakuTracker:
         """
         matched_hashes = self._get_matched_hashes(content, time_seconds, use_regex)
 
-        # 收集匹配的弹幕（用于报告）
-        hash_to_danmaku: Dict[str, List[str]] = {}
+        # 收集匹配的弹幕（用于报告）- 存储完整弹幕信息（内容+时间）
+        hash_to_danmaku: Dict[str, List[Dict]] = {}
         matched_danmaku_count = 0
         for dm in self.danmaku_list:
             if time_seconds is not None:
@@ -1039,8 +1039,12 @@ class DanmakuTracker:
                 matched_danmaku_count += 1
                 if dm.mid_hash not in hash_to_danmaku:
                     hash_to_danmaku[dm.mid_hash] = []
-                if dm.content not in hash_to_danmaku[dm.mid_hash]:
-                    hash_to_danmaku[dm.mid_hash].append(dm.content)
+                # 保留所有弹幕（即使内容相同但时间不同也有价值）
+                hash_to_danmaku[dm.mid_hash].append({
+                    'content': dm.content,
+                    'progress': dm.progress,  # 视频时间（毫秒）
+                    'ctime': dm.ctime  # 发送时间戳
+                })
 
         if not matched_hashes:
             self._log(f"未找到匹配的弹幕: {content}")
@@ -1174,10 +1178,9 @@ class DanmakuTracker:
                 if uid in uid_to_info:
                     has_valid_uid = True
                     if uid in user_data:
-                        # 合并弹幕
+                        # 合并弹幕（保留所有弹幕，即使内容相同但时间不同）
                         for dm in danmaku_list:
-                            if dm not in user_data[uid]['danmaku_list']:
-                                user_data[uid]['danmaku_list'].append(dm)
+                            user_data[uid]['danmaku_list'].append(dm)
                     else:
                         user_data[uid] = {
                             'uid': uid,
@@ -1260,8 +1263,8 @@ class DanmakuTracker:
             return html
 
         # 以下为原有逻辑（无缓存数据时执行）
-        # 1. 收集匹配的弹幕，按哈希分组
-        hash_to_danmaku: Dict[str, List[str]] = {}
+        # 1. 收集匹配的弹幕，按哈希分组 - 存储完整弹幕信息（内容+时间）
+        hash_to_danmaku: Dict[str, List[Dict]] = {}
         matched_danmaku_count = 0
 
         print("正在收集匹配的弹幕...")
@@ -1277,9 +1280,12 @@ class DanmakuTracker:
                 matched_danmaku_count += 1
                 if dm.mid_hash not in hash_to_danmaku:
                     hash_to_danmaku[dm.mid_hash] = []
-                # 去重添加弹幕内容
-                if dm.content not in hash_to_danmaku[dm.mid_hash]:
-                    hash_to_danmaku[dm.mid_hash].append(dm.content)
+                # 保留所有弹幕（即使内容相同但时间不同也有价值）
+                hash_to_danmaku[dm.mid_hash].append({
+                    'content': dm.content,
+                    'progress': dm.progress,  # 视频时间（毫秒）
+                    'ctime': dm.ctime  # 发送时间戳
+                })
 
         print(f"匹配弹幕: {matched_danmaku_count} 条")
         print(f"唯一哈希: {len(hash_to_danmaku)} 个")
@@ -1411,10 +1417,9 @@ class DanmakuTracker:
                 if uid in uid_to_info:
                     has_valid_uid = True
                     if uid in user_data:
-                        # 合并弹幕
+                        # 合并弹幕（保留所有弹幕，即使内容相同但时间不同）
                         for dm in danmaku_list:
-                            if dm not in user_data[uid]['danmaku_list']:
-                                user_data[uid]['danmaku_list'].append(dm)
+                            user_data[uid]['danmaku_list'].append(dm)
                     else:
                         user_data[uid] = {
                             'uid': uid,
@@ -1503,6 +1508,7 @@ class DanmakuTracker:
         .uid {{ color: #999; font-size: 12px; }}
         .danmaku-list {{ max-width: 400px; }}
         .danmaku-item {{ display: inline-block; background: #f0f0f0; padding: 4px 8px; margin: 2px; border-radius: 4px; font-size: 13px; word-break: break-all; }}
+        .danmaku-time {{ display: block; font-size: 10px; color: #999; margin-top: 2px; }}
         .danmaku-count {{ background: #00a1d6; color: #fff; padding: 2px 8px; border-radius: 10px; font-size: 12px; }}
         .uncracked {{ background: #fff3cd; padding: 15px; border-radius: 8px; margin-top: 20px; }}
         .uncracked-title {{ color: #856404; font-weight: bold; margin-bottom: 10px; }}
@@ -1555,7 +1561,7 @@ class DanmakuTracker:
                     <th style="width:150px">用户信息</th>
                     <th>签名</th>
                     <th style="width:250px">粉丝灯牌</th>
-                    <th>匹配弹幕内容</th>
+                    <th>匹配弹幕内容（时间信息）</th>
                     <th style="width:80px">弹幕数</th>
                 </tr>
             </thead>
@@ -1595,7 +1601,33 @@ class DanmakuTracker:
                 else:
                     medal_html = '<span style="color:#999;font-size:12px;">暂无灯牌</span>'
 
-            danmaku_html = ''.join(f'<span class="danmaku-item">{html_escape.escape(dm)}</span>' for dm in danmaku_list)
+            # 生成弹幕HTML（带时间信息）
+            danmaku_html_parts = []
+            for dm in danmaku_list:
+                if isinstance(dm, dict):
+                    # 新格式：字典，包含内容和时间
+                    content = dm.get('content', '')
+                    progress = dm.get('progress', 0)
+                    ctime = dm.get('ctime', 0)
+
+                    # 格式化视频时间
+                    video_time = f"{progress // 60000:02d}:{(progress // 1000) % 60:02d}"
+
+                    # 格式化发送时间
+                    if ctime > 0:
+                        send_time = datetime.fromtimestamp(ctime).strftime('%m-%d %H:%M:%S')
+                        time_info = f"视频: {video_time} | 发送: {send_time}"
+                    else:
+                        time_info = f"视频: {video_time}"
+
+                    danmaku_html_parts.append(
+                        f'<span class="danmaku-item" title="{html_escape.escape(time_info)}">{html_escape.escape(content)}<span class="danmaku-time">{time_info}</span></span>'
+                    )
+                else:
+                    # 旧格式：纯字符串
+                    danmaku_html_parts.append(f'<span class="danmaku-item">{html_escape.escape(str(dm))}</span>')
+
+            danmaku_html = ''.join(danmaku_html_parts)
 
             html += f'''                <tr style="{row_style}">
                     <td>{avatar_html}</td>
@@ -1621,7 +1653,12 @@ class DanmakuTracker:
             <div style="color:#666;font-size:13px;margin-bottom:10px;">可能是超过8位UID或已注销账号</div>
 '''
             for mid_hash, danmaku_list in uncracked_hashes[:20]:  # 只显示前20个
-                danmaku_preview = ', '.join(danmaku_list[:3])
+                # 支持新旧两种格式的弹幕列表
+                if danmaku_list and isinstance(danmaku_list[0], dict):
+                    contents = [dm.get('content', '') for dm in danmaku_list[:3]]
+                else:
+                    contents = [str(dm) for dm in danmaku_list[:3]]
+                danmaku_preview = ', '.join(contents)
                 if len(danmaku_list) > 3:
                     danmaku_preview += f' ... 等共{len(danmaku_list)}条'
                 html += f'            <div class="uncracked-item"><code>{mid_hash}</code>: {html_escape.escape(danmaku_preview)}</div>\n'

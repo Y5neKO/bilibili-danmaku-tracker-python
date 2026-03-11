@@ -224,17 +224,44 @@ class UserCard(ctk.CTkFrame):
                 )
                 self.medal_label.pack(side="left")
 
-        # 弹幕列表
+        # 弹幕列表（带时间信息）
         danmaku_list = self.user_data.get('danmaku_list', [])
         if danmaku_list:
             self.danmaku_frame = ctk.CTkFrame(self.info_frame, fg_color="transparent")
             self.danmaku_frame.pack(fill="x", pady=(5, 0))
 
+            # 格式化弹幕展示（包含时间信息）
+            danmaku_display_parts = []
+            for dm in danmaku_list[:5]:
+                if isinstance(dm, dict):
+                    # 新格式：字典，包含内容和时间
+                    content = dm.get('content', '')
+                    progress = dm.get('progress', 0)
+                    ctime = dm.get('ctime', 0)
+
+                    # 格式化视频时间
+                    video_time = f"{progress // 60000:02d}:{(progress // 1000) % 60:02d}"
+
+                    # 格式化发送时间
+                    if ctime > 0:
+                        from datetime import datetime
+                        send_time = datetime.fromtimestamp(ctime).strftime('%m-%d %H:%M')
+                        danmaku_display_parts.append(f'"{content}" [{video_time}|{send_time}]')
+                    else:
+                        danmaku_display_parts.append(f'"{content}" [{video_time}]')
+                else:
+                    # 旧格式：纯字符串
+                    danmaku_display_parts.append(str(dm))
+
+            display_text = f"发送弹幕: {', '.join(danmaku_display_parts)}"
+            if len(danmaku_list) > 5:
+                display_text += f' ...+{len(danmaku_list) - 5}'
+
             self.danmaku_label = ctk.CTkLabel(
                 self.danmaku_frame,
-                text=f"发送弹幕: {', '.join(danmaku_list[:5])}{'...' if len(danmaku_list) > 5 else ''}",
+                text=display_text,
                 font=ctk.CTkFont(size=11),
-                wraplength=400,
+                wraplength=450,
                 justify="left"
             )
             self.danmaku_label.pack(side="left")
