@@ -54,12 +54,12 @@ class MainWindow(ctk.CTk):
 
     def _create_ui(self):
         """创建UI组件"""
-        # 主容器
-        self.main_container = ctk.CTkFrame(self)
+        # 主容器（透明背景）
+        self.main_container = ctk.CTkFrame(self, fg_color="transparent")
         self.main_container.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # 底部面板（先pack到底部，使用side="bottom"）
-        self.bottom_frame = ctk.CTkFrame(self.main_container)
+        # 底部面板（透明背景）
+        self.bottom_frame = ctk.CTkFrame(self.main_container, fg_color="transparent")
         self.bottom_frame.pack(side="bottom", fill="x", pady=(10, 0))
 
         # 进度面板

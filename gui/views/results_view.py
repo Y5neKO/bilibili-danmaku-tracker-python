@@ -22,11 +22,11 @@ class ResultsView(ctk.CTkFrame):
 
     def _create_ui(self):
         """创建UI"""
-        # 顶部：视频信息和操作
-        self.top_frame = ctk.CTkFrame(self)
+        # 顶部：视频信息和操作（透明背景）
+        self.top_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.top_frame.pack(fill="x", padx=10, pady=10)
 
-        # 视频信息
+        # 视频信息（透明背景）
         self.video_info_frame = ctk.CTkFrame(self.top_frame, fg_color="transparent")
         self.video_info_frame.pack(side="left", fill="both", expand=True)
 
@@ -45,7 +45,7 @@ class ResultsView(ctk.CTkFrame):
         )
         self.video_url_label.pack(anchor="w")
 
-        # 操作按钮
+        # 操作按钮（透明背景）
         self.action_frame = ctk.CTkFrame(self.top_frame, fg_color="transparent")
         self.action_frame.pack(side="right")
 
@@ -57,8 +57,8 @@ class ResultsView(ctk.CTkFrame):
         )
         self.export_btn.pack(side="right", padx=5)
 
-        # 统计信息
-        self.stats_frame = ctk.CTkFrame(self)
+        # 统计信息（透明背景）
+        self.stats_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.stats_frame.pack(fill="x", padx=10, pady=5)
 
         self.stats_label = ctk.CTkLabel(
@@ -72,8 +72,8 @@ class ResultsView(ctk.CTkFrame):
         self.user_list = UserCardList(self)
         self.user_list.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # 未匹配哈希区域（初始隐藏）
-        self.unmatched_frame = ctk.CTkFrame(self)
+        # 未匹配哈希区域（初始隐藏，透明背景）
+        self.unmatched_frame = ctk.CTkFrame(self, fg_color="transparent")
         # 不在这里 pack，只有有未匹配时才显示
         self.unmatched_label = ctk.CTkLabel(
             self.unmatched_frame,

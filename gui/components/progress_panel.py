@@ -23,7 +23,7 @@ class ProgressPanel(ctk.CTkFrame):
     }
 
     def __init__(self, parent, state: AppState):
-        super().__init__(parent)
+        super().__init__(parent, fg_color="transparent")
         self.state = state
 
         self._create_ui()

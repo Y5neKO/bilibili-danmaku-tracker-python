@@ -22,8 +22,8 @@ class LogViewer(ctk.CTkFrame):
 
     def _create_ui(self):
         """创建UI"""
-        # 标题栏
-        self.title_frame = ctk.CTkFrame(self)
+        # 标题栏（透明背景）
+        self.title_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.title_frame.pack(fill="x")
 
         self.title_label = ctk.CTkLabel(

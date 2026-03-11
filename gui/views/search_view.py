@@ -23,8 +23,8 @@ class SearchView(ctk.CTkFrame):
 
     def _create_ui(self):
         """创建UI"""
-        # 左侧：输入区域
-        self.left_frame = ctk.CTkFrame(self)
+        # 左侧：输入区域（透明背景）
+        self.left_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.left_frame.pack(side="left", fill="both", expand=True, padx=(0, 10))
 
         # 标题
@@ -35,8 +35,8 @@ class SearchView(ctk.CTkFrame):
         )
         self.title_label.pack(pady=(10, 20))
 
-        # BV号输入
-        self.bvid_frame = ctk.CTkFrame(self.left_frame)
+        # BV号输入（透明背景）
+        self.bvid_frame = ctk.CTkFrame(self.left_frame, fg_color="transparent")
         self.bvid_frame.pack(fill="x", padx=20, pady=5)
 
         self.bvid_label = ctk.CTkLabel(self.bvid_frame, text="BV号:", width=80)
@@ -49,8 +49,8 @@ class SearchView(ctk.CTkFrame):
         )
         self.bvid_entry.pack(side="left", padx=10, fill="x", expand=True)
 
-        # 弹幕内容输入
-        self.content_frame = ctk.CTkFrame(self.left_frame)
+        # 弹幕内容输入（透明背景）
+        self.content_frame = ctk.CTkFrame(self.left_frame, fg_color="transparent")
         self.content_frame.pack(fill="x", padx=20, pady=5)
 
         self.content_label = ctk.CTkLabel(self.content_frame, text="弹幕内容:", width=80)
@@ -63,8 +63,8 @@ class SearchView(ctk.CTkFrame):
         )
         self.content_entry.pack(side="left", padx=10, fill="x", expand=True)
 
-        # 匹配选项
-        self.options_frame = ctk.CTkFrame(self.left_frame)
+        # 匹配选项（透明背景）
+        self.options_frame = ctk.CTkFrame(self.left_frame, fg_color="transparent")
         self.options_frame.pack(fill="x", padx=20, pady=10)
 
         self.regex_var = ctk.BooleanVar(value=False)
@@ -75,8 +75,8 @@ class SearchView(ctk.CTkFrame):
         )
         self.regex_check.pack(side="left", padx=10)
 
-        # 按钮区域
-        self.button_frame = ctk.CTkFrame(self.left_frame)
+        # 按钮区域（透明背景）
+        self.button_frame = ctk.CTkFrame(self.left_frame, fg_color="transparent")
         self.button_frame.pack(fill="x", padx=20, pady=20)
 
         self.search_btn = ctk.CTkButton(
@@ -101,8 +101,8 @@ class SearchView(ctk.CTkFrame):
         )
         self.stop_btn.pack(side="left", padx=10)
 
-        # 右侧：使用说明
-        self.right_frame = ctk.CTkFrame(self)
+        # 右侧：使用说明（透明背景）
+        self.right_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.right_frame.pack(side="right", fill="both", expand=True)
 
         self.help_title = ctk.CTkLabel(

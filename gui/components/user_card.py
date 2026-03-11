@@ -111,8 +111,8 @@ class UserCard(ctk.CTkFrame):
         self.container = ctk.CTkFrame(self, fg_color="transparent")
         self.container.pack(fill="x", padx=10, pady=10)
 
-        # 左侧：头像
-        self.avatar_frame = ctk.CTkFrame(self.container, width=60, height=60)
+        # 左侧：头像（透明背景）
+        self.avatar_frame = ctk.CTkFrame(self.container, width=60, height=60, fg_color="transparent")
         self.avatar_frame.pack(side="left", padx=(0, 15))
         self.avatar_frame.pack_propagate(False)
 
