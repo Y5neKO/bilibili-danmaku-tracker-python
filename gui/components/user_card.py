@@ -120,14 +120,16 @@ class UserCard(ctk.CTkFrame):
         if is_error:
             self.avatar_label = ctk.CTkLabel(
                 self.avatar_frame,
-                text="⚠️",
-                font=ctk.CTkFont(size=30)
+                text="[!]",
+                font=ctk.CTkFont(size=24, weight="bold"),
+                text_color="#ff6b6b"
             )
         else:
             self.avatar_label = ctk.CTkLabel(
                 self.avatar_frame,
-                text="👤",
-                font=ctk.CTkFont(size=30)
+                text="[头像]",
+                font=ctk.CTkFont(size=12),
+                text_color="gray"
             )
         self.avatar_label.pack(expand=True)
 
@@ -180,9 +182,11 @@ class UserCard(ctk.CTkFrame):
         sign = self.user_data.get('info', {}).get('sign', '')
         if sign:
             sign_color = "#ff6b6b" if is_error else "gray"
+            # 错误用户的sign已包含警告信息，正常用户需要添加前缀
+            sign_text = sign if is_error else f"签名: {sign}"
             self.sign_label = ctk.CTkLabel(
                 self.info_frame,
-                text=f"{'⚠️ ' if is_error else '签名: '}{sign}",
+                text=sign_text,
                 font=ctk.CTkFont(size=11),
                 text_color=sign_color,
                 wraplength=400,
@@ -212,7 +216,7 @@ class UserCard(ctk.CTkFrame):
                 # 灯牌颜色渐变（根据等级）
                 medal_color = self._get_medal_color(medal_level)
 
-                medal_text = f"🏅 {medal_name}({target_name}) Lv.{medal_level}"
+                medal_text = f"[灯牌] {medal_name}({target_name}) Lv.{medal_level}"
                 if len(medals) > 1:
                     medal_text += f" (+{len(medals)-1})"
 

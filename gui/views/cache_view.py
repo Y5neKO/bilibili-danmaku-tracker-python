@@ -20,9 +20,11 @@ class CacheView(ctk.CTkFrame):
 
         self._cache_dir = "cache/userinfo"
         self._hash_cache_file = "cache/hash_cache.json"
+        self._stats_loaded = False  # 标记是否已加载统计
 
         self._create_ui()
-        self._refresh_stats()
+        # 延迟加载统计信息，避免阻塞UI
+        self.after(100, self._refresh_stats)
 
     def _create_ui(self):
         """创建UI"""
@@ -123,37 +125,51 @@ class CacheView(ctk.CTkFrame):
         self.clear_all_btn.pack(padx=10, pady=10)
 
     def _refresh_stats(self):
-        """刷新缓存统计"""
-        # 哈希缓存统计
-        hash_count = 0
-        hash_size = 0
-        if os.path.exists(self._hash_cache_file):
+        """刷新缓存统计（异步执行，避免阻塞UI）"""
+        def do_refresh():
+            # 声明所有需要的变量
+            hash_count = 0
+            hash_size = 0
+            user_count = 0
+            user_size = 0
+
+            # 哈希缓存统计
             try:
-                with open(self._hash_cache_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    hash_count = len(data)
-                hash_size = os.path.getsize(self._hash_cache_file)
-            except:
+                if os.path.exists(self._hash_cache_file):
+                    with open(self._hash_cache_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        hash_count = len(data)
+                    hash_size = os.path.getsize(self._hash_cache_file)
+            except Exception:
                 pass
 
-        hash_size_str = self._format_size(hash_size)
+            # 用户缓存统计
+            try:
+                if os.path.exists(self._cache_dir):
+                    files = [f for f in os.listdir(self._cache_dir) if f.endswith('.json')]
+                    user_count = len(files)
+                    for f in files:
+                        user_size += os.path.getsize(os.path.join(self._cache_dir, f))
+            except Exception:
+                pass
+
+            # 更新UI（在主线程）
+            hash_size_str = self._format_size(hash_size)
+            user_size_str = self._format_size(user_size)
+
+            # 使用 after 来安全更新UI
+            self.after(0, lambda: self._update_stats_ui(hash_count, hash_size_str, user_count, user_size_str))
+
+        # 在后台线程执行统计
+        import threading
+        thread = threading.Thread(target=do_refresh, daemon=True)
+        thread.start()
+
+    def _update_stats_ui(self, hash_count, hash_size_str, user_count, user_size_str):
+        """更新统计信息UI（在主线程调用）"""
         self.hash_cache_stats.configure(
             text=f"缓存条目: {hash_count} | 文件大小: {hash_size_str}"
         )
-
-        # 用户缓存统计
-        user_count = 0
-        user_size = 0
-        if os.path.exists(self._cache_dir):
-            try:
-                files = [f for f in os.listdir(self._cache_dir) if f.endswith('.json')]
-                user_count = len(files)
-                for f in files:
-                    user_size += os.path.getsize(os.path.join(self._cache_dir, f))
-            except:
-                pass
-
-        user_size_str = self._format_size(user_size)
         self.user_cache_stats.configure(
             text=f"缓存条目: {user_count} | 目录大小: {user_size_str}"
         )
@@ -175,7 +191,8 @@ class CacheView(ctk.CTkFrame):
                 self._show_message("哈希缓存已清空")
             except Exception as e:
                 self._show_error(f"清空失败: {e}")
-        self._refresh_stats()
+        else:
+            self._show_message("哈希缓存为空")
 
     def _clear_user_cache(self):
         """清空用户缓存"""
@@ -187,7 +204,8 @@ class CacheView(ctk.CTkFrame):
                 self._show_message("用户缓存已清空")
             except Exception as e:
                 self._show_error(f"清空失败: {e}")
-        self._refresh_stats()
+        else:
+            self._show_message("用户缓存为空")
 
     def _clear_all_cache(self):
         """清空所有缓存"""
@@ -199,7 +217,6 @@ class CacheView(ctk.CTkFrame):
         """显示消息"""
         self.hash_cache_stats.configure(text=message, text_color="green")
         self.after(2000, lambda: self.hash_cache_stats.configure(text_color="white"))
-        self._refresh_stats()
 
     def _show_error(self, message: str):
         """显示错误"""

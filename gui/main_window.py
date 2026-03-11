@@ -109,14 +109,16 @@ class MainWindow(ctk.CTk):
             self.app_state
         )
         self.settings_view.pack(fill="both", expand=True, padx=5, pady=5)
-        # 加载已保存的设置到UI
-        self.settings_view.load_settings()
+        # 设置加载已在 SettingsView.__init__ 中延迟执行
 
         self.cache_view = CacheView(
             self.tab_cache,
             self.app_state
         )
         self.cache_view.pack(fill="both", expand=True, padx=5, pady=5)
+
+        # 强制完成初始渲染
+        self.update_idletasks()
 
     def _toggle_log(self):
         """切换日志显示"""
@@ -162,11 +164,17 @@ class MainWindow(ctk.CTk):
     def _export_html(self) -> str:
         """导出HTML报告"""
         from tkinter import filedialog
+        from datetime import datetime
+
+        # 生成带时间的文件名
+        bvid = self.app_state.video_info.bvid if self.app_state.video_info else 'unknown'
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"report_{bvid}_{timestamp}.html"
 
         file_path = filedialog.asksaveasfilename(
             defaultextension=".html",
             filetypes=[("HTML文件", "*.html"), ("所有文件", "*.*")],
-            initialfile=f"report_{self.app_state.video_info.bvid if self.app_state.video_info else 'unknown'}.html"
+            initialfile=filename
         )
 
         if file_path:

@@ -1196,7 +1196,7 @@ class DanmakuTracker:
                     'mid_hash': mid_hash,
                     'name': f'UID:{error_uid}',
                     'face': '',
-                    'sign': '⚠️ 用户信息获取失败（可能已注销或封禁）',
+                    'sign': '[警告] 用户信息获取失败（已注销/封禁/超过8位UID/网络错误）',
                     'is_error': True,
                     'error_type': 'fetch_failed'
                 }
@@ -1434,7 +1434,7 @@ class DanmakuTracker:
                     'mid_hash': mid_hash,
                     'name': f'UID:{error_uid}',
                     'face': '',
-                    'sign': '⚠️ 用户信息获取失败（可能已注销或封禁）',
+                    'sign': '[警告] 用户信息获取失败（已注销/封禁/超过8位UID/网络错误）',
                     'is_error': True,
                     'error_type': 'fetch_failed'
                 }
@@ -1517,7 +1517,7 @@ class DanmakuTracker:
         .video-info {{ background: #fff; padding: 15px 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
         .video-info a {{ color: #00a1d6; text-decoration: none; font-size: 16px; }}
         .video-info a:hover {{ text-decoration: underline; }}
-        .sign {{ color: #999; font-size: 12px; margin-top: 4px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+        .sign {{ color: #999; font-size: 12px; margin-top: 4px; max-width: 200px; word-wrap: break-word; white-space: pre-wrap; }}
         .medal-list {{ max-width: 250px; }}
         .medal-item {{ display: inline-block; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); color: #fff; padding: 2px 8px; margin: 2px; border-radius: 4px; font-size: 12px; }}
         .medal-level {{ background: rgba(255,255,255,0.3); padding: 1px 4px; border-radius: 3px; margin-left: 4px; font-size: 11px; }}
@@ -1578,7 +1578,7 @@ class DanmakuTracker:
             # 错误用户使用特殊样式
             if is_error:
                 row_style = 'background:#fff3cd;'
-                avatar_html = '<div class="no-avatar" style="background:#ffe0b2;">⚠️</div>'
+                avatar_html = '<div class="no-avatar" style="background:#ffe0b2;">[!]</div>'
                 user_name_html = f'<span class="user-name" style="color:#856404;">{html_escape.escape(info["name"])} <span style="font-size:11px;color:#ff6b6b;">[获取失败]</span></span>'
                 uid_html = f'<div class="uid">UID: {data["uid"]} | Hash: {html_escape.escape(info.get("mid_hash", ""))}</div>'
                 sign_html = f'<span style="color:#ff6b6b;">{html_escape.escape(info.get("sign", "用户信息获取失败"))}</span>'

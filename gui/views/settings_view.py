@@ -15,8 +15,11 @@ class SettingsView(ctk.CTkScrollableFrame):
     def __init__(self, parent, state: AppState):
         super().__init__(parent)
         self.state = state
+        self._settings_loaded = False  # 标记是否已加载设置
 
         self._create_ui()
+        # 延迟加载设置，避免阻塞UI
+        self.after(50, self.load_settings)
 
     def _create_ui(self):
         """创建UI"""

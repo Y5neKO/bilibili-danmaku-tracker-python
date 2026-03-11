@@ -114,7 +114,7 @@ class ResultsView(ctk.CTkFrame):
         if uncracked:
             uncracked_count = len(uncracked)
             self.unmatched_label.configure(
-                text=f"⚠️ 有 {uncracked_count} 个哈希无法匹配（可能是超过8位UID或已删号）"
+                text=f"[警告] 有 {uncracked_count} 个哈希无法匹配（可能是超过8位UID或已删号）"
             )
             # 显示未匹配区域
             if not self.unmatched_frame.winfo_ismapped():
